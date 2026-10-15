@@ -15,6 +15,13 @@
 //   i  パネルの色の反転をオン (INVON)   n  オフ (INVOFF)
 //   f  次の色で塗る (赤 → 緑 → 青 → 白 → 黒)
 //   Y  パネル用の 3 本を 5 秒浮かせる (LCD_CS だけ内部プルアップ)   Z  3 本とも完全に浮かせる
+//   N  パネルに 0x13 NORON と 0x38 IDMOFF を送る (全画素オフ/オン仮説の検証)
+//   C  LCD_CS と SCLK の入力時の読み値 (基板側のプル抵抗の有無)
+//   m0-m5  SCLK を 5 秒浮かせた直後に、候補の手順 (0 なし、1 CS 上げ下げ、2 SWRESET x3、3 2 秒待ち、4 初期化 2 回、5 SCLK 空打ち) を挟んで初期化 (E11)
+//   x/y/z  LCD_CS/SCLK/DIN の 1 本だけを 5 秒浮かせてから #0 と同じ初期化 (E10)
+//   A  パネル線 3 本を 5 秒浮かせてから #0 と同じ初期化 (E5)   B  LCD_CS だけ High に保って同じ (E6)
+//   R  esp_restart() でソフト再起動 (E7)
+//   G0-G5  LT7680 をリセットに保ってクロックを 0.1/1/2/4/8/16 秒止めてから #0 と同じ手順 (実験 E1)
 //   0-5  LT7680 をやり直し、0/0.2/0.5/1/2/5 秒待ってからパネルのソフトリセットと初期化
 //   V  LCM_RESET を 1 秒浮かせてから #0 と同じ手順   X  LCM_RESET と LCM_SCS を浮かせてから同じ手順
 //   K  黒で塗る   W  白で塗る (カメラでの判定用。差が大きい)
@@ -297,6 +304,9 @@ void fillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color
   (void)t0;
 }
 
+#ifndef BOOT_SERIAL_DELAY_MS
+#define BOOT_SERIAL_DELAY_MS 1500  // シリアルの読み手が付くのを待つ時間。実験 E4 では 0 にする
+#endif
 #ifndef BOOT_SETTLE_MS
 #define BOOT_SETTLE_MS 8000  // 起動からパネルを含めた初期化までの待ち
 #endif
@@ -324,7 +334,7 @@ void setup() {
   digitalWrite(PIN_BL, LOW);
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
-  delay(1500);
+  delay(BOOT_SERIAL_DELAY_MS);
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, -1);
 
   // 起動の正常系 (2026-10-15 の試行錯誤から):
@@ -356,14 +366,119 @@ int colorIdx = 1;  // 起動時の色 (緑)
 bool bl = true;
 
 bool armed = false;
+char pendingCmd = 0;  // 引数を 1 文字取る命令 (G) の待ち
+
+// 実験 E1: LT7680 をリセットに保ってパネルのクロックを gapMs 止めてから、#0 と同じ手順を行う
+void gapThenReinit(uint32_t gapMs) {
+  digitalWrite(PIN_RESET, LOW);
+  delay(gapMs);
+  bool ok = initLt7680();  // この中で 100ms のリセットと PLL、SDRAM
+  writeReg(0x12, readReg(0x12) | 0x40);
+  setupMemory();
+  fillRect(0, 0, 479, 479, COLORS[colorIdx]);
+  resetAndInitPanel();
+  Serial.printf("cmd G: clock gap %lu ms, lt7680 %s, panel SWRESET + init\n", (unsigned long)gapMs, ok ? "OK" : "FAILED");
+}
 
 void loop() {
   if (!Serial.available()) { delay(5); return; }
   char c = Serial.read();
+  if (pendingCmd == 'm') {
+    pendingCmd = 0;
+    if (c < '0' || c > '5') return;
+    // 実験 E11: SCLK を 5 秒浮かせた直後に、候補の手順を挟んでから #0 と同じ初期化
+    pinMode(PIN_PANEL_SCK, INPUT);
+    delay(5000);
+    pinMode(PIN_PANEL_SCK, OUTPUT);
+    digitalWrite(PIN_PANEL_SCK, LOW);
+    switch (c) {
+      case '1':  // CS を SCLK Low のまま 16 回上げ下げ
+        for (int i = 0; i < 16; i++) { digitalWrite(PIN_LCD_CS, LOW); delayMicroseconds(20); digitalWrite(PIN_LCD_CS, HIGH); delayMicroseconds(20); }
+        break;
+      case '2':  // ソフトリセット 3 回
+        for (int i = 0; i < 3; i++) { panelCmd(0x01); delay(150); }
+        break;
+      case '3':  // 2 秒待つ
+        delay(2000);
+        break;
+      case '5':  // CS High のまま SCLK を 32 回打ち、その後 CS を上げ下げ
+        for (int i = 0; i < 32; i++) { digitalWrite(PIN_PANEL_SCK, HIGH); delayMicroseconds(2); digitalWrite(PIN_PANEL_SCK, LOW); delayMicroseconds(2); }
+        digitalWrite(PIN_LCD_CS, LOW); delayMicroseconds(20); digitalWrite(PIN_LCD_CS, HIGH); delayMicroseconds(20);
+        break;
+    }
+    gapThenReinit(100);
+    if (c == '4') { delay(200); resetAndInitPanel(); }  // 初期化列を 2 回
+    Serial.printf("cmd m%c done\n", c);
+    return;
+  }
+  if (pendingCmd == 'G') {
+    pendingCmd = 0;
+    static const uint32_t GAPS[] = {100, 1000, 2000, 4000, 8000, 16000};
+    if (c >= '0' && c <= '5') gapThenReinit(GAPS[c - '0']);
+    return;
+  }
   if (c == '#') { armed = true; return; }
   if (!armed) return;
   armed = false;
   switch (c) {
+    case 'G': pendingCmd = 'G'; break;
+    case 'm': pendingCmd = 'm'; break;
+    case 'x':
+    case 'y':
+    case 'z': {
+      // 実験 E10: 1 本だけ 5 秒浮かせてから #0 と同じ初期化。x=LCD_CS、y=SCLK、z=DIN。他の 2 本は駆動したまま
+      int pin = (c == 'x') ? PIN_LCD_CS : (c == 'y') ? PIN_PANEL_SCK : PIN_PANEL_SDA;
+      pinMode(pin, INPUT);
+      delay(5000);
+      pinMode(pin, OUTPUT);
+      digitalWrite(pin, (pin == PIN_LCD_CS) ? HIGH : LOW);
+      Serial.printf("cmd %c: floated %s 5 s, then\n", c, (c == 'x') ? "LCD_CS" : (c == 'y') ? "SCLK" : "DIN");
+      gapThenReinit(100);
+      break;
+    }
+    case 'N':
+      // 仮説の検証: 浮いた線から入ったでたらめな命令が「全画素オフ 0x22 / 全画素オン 0x23」だとすれば、
+      // 通常表示モード 0x13 (とアイドル解除 0x38) を送るだけで戻るはず
+      panelCmd(0x13);
+      panelCmd(0x38);
+      Serial.println("cmd N: NORON + IDMOFF sent");
+      break;
+    case 'C': {
+      // LCD_CS を入力にしたときの読み値。内部プルアップで 1 にならなければ、基板側に強いプルダウンがある
+      pinMode(PIN_LCD_CS, INPUT_PULLUP); delayMicroseconds(100); int up = digitalRead(PIN_LCD_CS);
+      pinMode(PIN_LCD_CS, INPUT); delayMicroseconds(100); int none = digitalRead(PIN_LCD_CS);
+      pinMode(PIN_LCD_CS, INPUT_PULLDOWN); delayMicroseconds(100); int down = digitalRead(PIN_LCD_CS);
+      pinMode(PIN_LCD_CS, OUTPUT); digitalWrite(PIN_LCD_CS, HIGH);
+      pinMode(PIN_PANEL_SCK, INPUT_PULLUP); delayMicroseconds(100); int sup = digitalRead(PIN_PANEL_SCK);
+      pinMode(PIN_PANEL_SCK, INPUT_PULLDOWN); delayMicroseconds(100); int sdown = digitalRead(PIN_PANEL_SCK);
+      pinMode(PIN_PANEL_SCK, OUTPUT); digitalWrite(PIN_PANEL_SCK, LOW);
+      Serial.printf("cmd C: LCD_CS pullup=%d none=%d pulldown=%d | SCLK pullup=%d pulldown=%d\n", up, none, down, sup, sdown);
+      break;
+    }
+    case 'A':
+    case 'B': {
+      // 実験 E5/E6: パネル線を 5 秒浮かせてから、すぐに #0 と同じ初期化を行う。
+      // A は 3 本とも浮かせる。B は LCD_CS だけ内部プルアップで High に保つ
+      pinMode(PIN_LCD_CS, c == 'B' ? INPUT_PULLUP : INPUT);
+      pinMode(PIN_PANEL_SCK, INPUT);
+      pinMode(PIN_PANEL_SDA, INPUT);
+      delay(5000);
+      pinMode(PIN_LCD_CS, OUTPUT);
+      digitalWrite(PIN_LCD_CS, HIGH);
+      pinMode(PIN_PANEL_SCK, OUTPUT);
+      digitalWrite(PIN_PANEL_SCK, LOW);
+      pinMode(PIN_PANEL_SDA, OUTPUT);
+      digitalWrite(PIN_PANEL_SDA, LOW);
+      Serial.printf("cmd %c: panel lines floated 5 s%s, then\n", c, c == 'B' ? " (LCD_CS pulled up)" : "");
+      gapThenReinit(100);
+      break;
+    }
+    case 'R':
+      // 実験 E7: USB の再列挙を伴わないソフト再起動。起動の流れがそのまま走る
+      Serial.println("cmd R: esp_restart");
+      delay(50);
+      esp_restart();
+      break;
     case 'l': {
       bool ok = initLt7680();
       writeReg(0x12, readReg(0x12) | 0x40);
