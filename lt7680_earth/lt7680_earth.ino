@@ -291,6 +291,15 @@ void fillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color
 #ifndef BOOT_SERIAL_DELAY_MS
 #define BOOT_SERIAL_DELAY_MS 1500  // シリアルの読み手が付くのを待つ時間。実験 E4 では 0 にする
 #endif
+#ifndef BOOT_FLOWS
+#define BOOT_FLOWS 2
+#endif
+#ifndef BOOT_PANEL_INITS
+#define BOOT_PANEL_INITS 2
+#endif
+#ifndef BOOT_FLOW_GAP_MS
+#define BOOT_FLOW_GAP_MS 0
+#endif
 #ifndef BOOT_SETTLE_MS
 #define BOOT_SETTLE_MS 0  // 起動からパネルを含めた初期化までの待ち
 #endif
@@ -333,7 +342,27 @@ void drawEarth() {
   Serial.printf("earth: face 0 written in %lu ms\n", (unsigned long)(millis() - t0));
 }
 
+#include "soc/io_mux_reg.h"
+#include "soc/gpio_reg.h"
+#include "soc/gpio_periph.h"
+// setup の先頭でピンに触る前に、リセット直後の IO_MUX の設定 (プルアップ/ダウン、入力有効) と入力の値を控える
+uint32_t bootMux[8], bootIn;
+void snapshotBootPins() {
+  const int pins[8] = {1, 2, 3, 4, 5, 6, 7, 9};  // D0 D1 D2 D3 D4 D5 D8 D10
+  for (int i = 0; i < 8; i++) bootMux[i] = REG_READ(GPIO_PIN_MUX_REG[pins[i]]);
+  bootIn = REG_READ(GPIO_IN_REG);
+}
+void printBootPins() {
+  const int pins[8] = {1, 2, 3, 4, 5, 6, 7, 9};
+  const char *names[8] = {"D0", "D1", "D2", "D3", "D4", "D5", "D8", "D10"};
+  for (int i = 0; i < 8; i++)
+    Serial.printf("bootpin %s gpio%d: mux=0x%08lx wpu=%d wpd=%d ie=%d in=%d\n", names[i], pins[i], (unsigned long)bootMux[i],
+                  (int)((bootMux[i] >> FUN_PU_S) & 1), (int)((bootMux[i] >> FUN_PD_S) & 1), (int)((bootMux[i] >> FUN_IE_S) & 1),
+                  (int)((bootIn >> pins[i]) & 1));
+}
+
 void setup() {
+  snapshotBootPins();
   // LCM_RESET は基板にプルアップが無く、浮くとノイズで LT7680 がリセットを繰り返す。
   // 起動の最初に High に固定する
   pinMode(PIN_RESET, OUTPUT_OPEN_DRAIN);
@@ -365,17 +394,23 @@ void setup() {
   why = esp_reset_reason();
   powerOn = (why == ESP_RST_POWERON);
   Serial.printf("reset reason: %d (%s)\n", (int)why, powerOn ? "power on" : "not power on");
+  printBootPins();
   delay(BOOT_SETTLE_MS);
-  bool ok = initLt7680();
-  Serial.printf("lt7680: %s\n", ok ? "INIT OK" : "INIT FAILED");
-  writeReg(0x12, readReg(0x12) | 0x40);  // 表示オン
-  setupMemory();
-  // 起動時は緑で塗る。カメラの判定で、机 (橙) とも黒いパネル (青に写る) とも重ならない色
-  fillRect(0, 0, 479, 479, 0x07E0);
-  resetAndInitPanel();
-  delay(200);
-  resetAndInitPanel();
-  Serial.println("panel: SWRESET + init, twice");
+  // 実験 E15: LT7680 のリセットを含む流れ全体を BOOT_FLOWS 回、BOOT_FLOW_GAP_MS 空けて走らせる
+  for (int f = 0; f < BOOT_FLOWS; f++) {
+    if (f > 0) delay(BOOT_FLOW_GAP_MS);
+    bool ok = initLt7680();
+    Serial.printf("lt7680: %s\n", ok ? "INIT OK" : "INIT FAILED");
+    writeReg(0x12, readReg(0x12) | 0x40);  // 表示オン
+    setupMemory();
+    // 起動時は緑で塗る。カメラの判定で、机 (橙) とも黒いパネル (青に写る) とも重ならない色
+    fillRect(0, 0, 479, 479, 0x07E0);
+    for (int k = 0; k < BOOT_PANEL_INITS; k++) {
+      if (k > 0) delay(200);
+      resetAndInitPanel();
+    }
+    Serial.printf("panel: SWRESET + init x%d (flow %d of %d)\n", BOOT_PANEL_INITS, f + 1, BOOT_FLOWS);
+  }
   drawEarth();
   digitalWrite(PIN_BL, HIGH);
   Serial.println("shell ready");
@@ -400,6 +435,48 @@ void gapThenReinit(uint32_t gapMs) {
   fillRect(0, 0, 479, 479, COLORS[colorIdx]);
   resetAndInitPanel();
   Serial.printf("cmd G: clock gap %lu ms, lt7680 %s, panel SWRESET + init\n", (unsigned long)gapMs, ok ? "OK" : "FAILED");
+}
+
+// 実験 F: 起動時と同じ条件を命令で模倣する。variant のビット: 1=パネル 3 本と LCM_RESET/LCM_SCS を 3 秒浮かせる
+// (0 なら SCLK だけ)、2=その間と初期化中はバックライトを消す、4=初期化の直後に地球を描かない
+void bootLikeFlow(int variant) {
+  bool floatAll = !(variant & 1);
+  bool blOff = !(variant & 2);
+  bool draw = !(variant & 4);
+  uint32_t t0 = millis();
+  if (blOff) digitalWrite(PIN_BL, LOW);
+  pinMode(PIN_PANEL_SCK, INPUT);
+  if (floatAll) {
+    pinMode(PIN_PANEL_SDA, INPUT);
+    pinMode(PIN_LCD_CS, INPUT);
+    pinMode(PIN_SCS, INPUT);
+    gpio_pullup_dis((gpio_num_t)PIN_RESET);
+    pinMode(PIN_RESET, INPUT);
+  }
+  delay(3000);
+  pinMode(PIN_RESET, OUTPUT_OPEN_DRAIN);
+  gpio_pullup_en((gpio_num_t)PIN_RESET);
+  digitalWrite(PIN_RESET, HIGH);
+  pinMode(PIN_SCS, OUTPUT);
+  digitalWrite(PIN_SCS, HIGH);
+  pinMode(PIN_LCD_CS, OUTPUT);
+  digitalWrite(PIN_LCD_CS, HIGH);
+  pinMode(PIN_PANEL_SCK, OUTPUT);
+  digitalWrite(PIN_PANEL_SCK, LOW);
+  pinMode(PIN_PANEL_SDA, OUTPUT);
+  digitalWrite(PIN_PANEL_SDA, LOW);
+  delay(1500);
+  bool ok = initLt7680();
+  writeReg(0x12, readReg(0x12) | 0x40);
+  setupMemory();
+  fillRect(0, 0, 479, 479, 0x07E0);
+  resetAndInitPanel();
+  delay(200);
+  resetAndInitPanel();
+  if (draw) drawEarth();
+  digitalWrite(PIN_BL, HIGH);
+  Serial.printf("cmd F%d: float %s, bl %s, draw %s, lt7680 %s, init twice, took %lu ms\n", variant, floatAll ? "all" : "sclk",
+                blOff ? "off" : "on", draw ? "yes" : "no", ok ? "OK" : "FAILED", (unsigned long)(millis() - t0));
 }
 
 void loop() {
@@ -433,6 +510,11 @@ void loop() {
     Serial.printf("cmd m%c done\n", c);
     return;
   }
+  if (pendingCmd == 'F') {
+    pendingCmd = 0;
+    if (c >= '0' && c <= '7') bootLikeFlow(c - '0');
+    return;
+  }
   if (pendingCmd == 'G') {
     pendingCmd = 0;
     static const uint32_t GAPS[] = {100, 1000, 2000, 4000, 8000, 16000};
@@ -444,6 +526,7 @@ void loop() {
   armed = false;
   switch (c) {
     case 'G': pendingCmd = 'G'; break;
+    case 'F': pendingCmd = 'F'; break;
     case 'E': drawEarth(); break;
     case 'm': pendingCmd = 'm'; break;
     case 'x':
