@@ -294,6 +294,9 @@ void fillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color
 #ifndef BOOT_FLOWS
 #define BOOT_FLOWS 2
 #endif
+#ifndef BOOT_FLOWS_POWERON
+#define BOOT_FLOWS_POWERON 1
+#endif
 #ifndef BOOT_PANEL_INITS
 #define BOOT_PANEL_INITS 2
 #endif
@@ -396,8 +399,32 @@ void setup() {
   Serial.printf("reset reason: %d (%s)\n", (int)why, powerOn ? "power on" : "not power on");
   printBootPins();
   delay(BOOT_SETTLE_MS);
+#ifdef BOOT_DIAG
+  // 実験 E16 (電源投入の診断): 起動からの決まった時刻に流れを 1 回ずつ行い、毎回白で塗る。
+  // カメラの連続撮影で、何秒後の流れで初めて白くなるかを読む
+  {
+    static const uint32_t AT_MS[] = {0, 5000, 10000, 20000, 40000, 80000};
+    for (uint32_t at : AT_MS) {
+      while (millis() < at) delay(10);
+      bool ok = initLt7680();
+      writeReg(0x12, readReg(0x12) | 0x40);
+      setupMemory();
+      fillRect(0, 0, 479, 479, 0xFFFF);
+      resetAndInitPanel();
+      delay(200);
+      resetAndInitPanel();
+      digitalWrite(PIN_BL, HIGH);
+      Serial.printf("diag: flow at %lu ms done at %lu ms, lt7680 %s\n", (unsigned long)at, (unsigned long)millis(), ok ? "OK" : "FAILED");
+    }
+    Serial.println("shell ready");
+    return;
+  }
+#endif
   // 実験 E15: LT7680 のリセットを含む流れ全体を BOOT_FLOWS 回、BOOT_FLOW_GAP_MS 空けて走らせる
-  for (int f = 0; f < BOOT_FLOWS; f++) {
+  // 電源投入 (POR) では最初の流れで映り、2 回目の流れが壊す (E16)。XIAO だけのリセットでは逆に
+  // 最初の流れでは映らず 2 回目で映る (E15)。リセットの理由で回数を変える
+  int flows = powerOn ? BOOT_FLOWS_POWERON : BOOT_FLOWS;
+  for (int f = 0; f < flows; f++) {
     if (f > 0) delay(BOOT_FLOW_GAP_MS);
     bool ok = initLt7680();
     Serial.printf("lt7680: %s\n", ok ? "INIT OK" : "INIT FAILED");
@@ -409,7 +436,7 @@ void setup() {
       if (k > 0) delay(200);
       resetAndInitPanel();
     }
-    Serial.printf("panel: SWRESET + init x%d (flow %d of %d)\n", BOOT_PANEL_INITS, f + 1, BOOT_FLOWS);
+    Serial.printf("panel: SWRESET + init x%d (flow %d of %d)\n", BOOT_PANEL_INITS, f + 1, flows);
   }
   drawEarth();
   digitalWrite(PIN_BL, HIGH);
