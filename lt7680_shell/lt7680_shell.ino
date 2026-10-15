@@ -14,6 +14,10 @@
 //   s  パネルにページ 0 の選択とソフトリセットだけを送る
 //   i  パネルの色の反転をオン (INVON)   n  オフ (INVOFF)
 //   f  次の色で塗る (赤 → 緑 → 青 → 白 → 黒)
+//   Y  パネル用の 3 本を 5 秒浮かせる (LCD_CS だけ内部プルアップ)   Z  3 本とも完全に浮かせる
+//   0-5  LT7680 をやり直し、0/0.2/0.5/1/2/5 秒待ってからパネルのソフトリセットと初期化
+//   V  LCM_RESET を 1 秒浮かせてから #0 と同じ手順   X  LCM_RESET と LCM_SCS を浮かせてから同じ手順
+//   K  黒で塗る   W  白で塗る (カメラでの判定用。差が大きい)
 //   b  バックライトの点灯と消灯を切り替える
 //   r  LT7680 の状態を表示する
 
@@ -148,6 +152,8 @@ static const uint8_t ST7701S_ER_TFT040_3[] = {
   0x00, 0xFE, 20,  // 待ち 20 ms
 };
 
+void resetAndInitPanel();
+
 void sendPanelInit() {
   size_t i = 0;
   while (i < sizeof(ST7701S_ER_TFT040_3)) {
@@ -169,6 +175,18 @@ void initPanel() {
   digitalWrite(PIN_PANEL_SDA, LOW);
   sendPanelInit();
   Serial.println("panel: ER-TFT040-3 ST7701S init sent");
+}
+
+void resetAndInitPanel() {
+  pinMode(PIN_PANEL_SCK, OUTPUT);
+  pinMode(PIN_PANEL_SDA, OUTPUT);
+  digitalWrite(PIN_PANEL_SCK, LOW);
+  digitalWrite(PIN_PANEL_SDA, LOW);
+  const uint8_t page0[] = {0x77, 0x01, 0x00, 0x00, 0x00};
+  panelCmd(0xFF, page0, sizeof(page0));
+  panelCmd(0x01);  // SWRESET
+  delay(120);
+  sendPanelInit();
 }
 
 // ---- 表示タイミング (480x480) ----
@@ -279,6 +297,13 @@ void fillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color
   (void)t0;
 }
 
+#ifndef BOOT_SETTLE_MS
+#define BOOT_SETTLE_MS 8000  // 起動からパネルを含めた初期化までの待ち
+#endif
+
+esp_reset_reason_t why = ESP_RST_UNKNOWN;
+bool powerOn = false;
+
 void setup() {
   // LCM_RESET は基板にプルアップが無く、浮くとノイズで LT7680 がリセットを繰り返す。
   // 起動の最初に High に固定する
@@ -289,6 +314,12 @@ void setup() {
   digitalWrite(PIN_SCS, HIGH);
   pinMode(PIN_LCD_CS, OUTPUT);
   digitalWrite(PIN_LCD_CS, HIGH);
+  // パネル用の SCLK と DIN も、起動したらすぐ出力にする。電源投入でない起動ではパネルを初期化しないが、
+  // 後から #s や #p を送れるようにするため (以前は初期化のときだけ出力にしていて、命令が出ていなかった)
+  pinMode(PIN_PANEL_SCK, OUTPUT);
+  digitalWrite(PIN_PANEL_SCK, LOW);
+  pinMode(PIN_PANEL_SDA, OUTPUT);
+  digitalWrite(PIN_PANEL_SDA, LOW);
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, LOW);
   Serial.begin(115200);
@@ -296,24 +327,24 @@ void setup() {
   delay(1500);
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, -1);
 
+  // 起動の正常系 (2026-10-15 の試行錯誤から):
+  // 命令として実行した「LT7680 のリセットと初期化 → 表示オン → 主画面の設定と塗りつぶし →
+  // パネルのソフトリセット → パネルの初期化」は、起動から 8〜10 秒後なら 21 回中 18 回映った。
+  // 同じ関数を起動直後 (約 1.5 秒) に呼ぶと、ほとんど映らなかった。順番、LT7680 の再始動から
+  // パネルの初期化までの待ち、線の浮き、バックライトの切り替えは差を生まなかったので、
+  // 起動からの経過時間を合わせる
+  why = esp_reset_reason();
+  powerOn = (why == ESP_RST_POWERON);
+  Serial.printf("reset reason: %d (%s)\n", (int)why, powerOn ? "power on" : "not power on");
+  delay(BOOT_SETTLE_MS);
   bool ok = initLt7680();
   Serial.printf("lt7680: %s\n", ok ? "INIT OK" : "INIT FAILED");
-  // パネルの初期化は電源投入のときだけ行う。XIAO だけのリセットでは、パネルは前の状態のまま動いている。
-  // 動いているパネルに初期化を重ねると、黒 (ソフトリセットと初期化で戻る) か、
-  // 命令を受け付けない白っぽい画面 (電源の入れ直しでしか戻らない) に落ちることがあった (2026-10-15)
-  esp_reset_reason_t why = esp_reset_reason();
-  bool powerOn = (why == ESP_RST_POWERON);
-  Serial.printf("reset reason: %d (%s)\n", (int)why, powerOn ? "power on" : "not power on");
-  if (powerOn) {
-    initPanel();
-    Serial.println("panel: init sent (power on)");
-  } else {
-    Serial.println("panel: left untouched (not power on)");
-  }
   writeReg(0x12, readReg(0x12) | 0x40);  // 表示オン
   setupMemory();
   // 起動時は緑で塗る。カメラの判定で、机 (橙) とも黒いパネル (青に写る) とも重ならない色
   fillRect(0, 0, 479, 479, 0x07E0);
+  resetAndInitPanel();
+  Serial.println("panel: SWRESET + init");
   digitalWrite(PIN_BL, HIGH);
   Serial.println("shell ready");
   Serial.println("backlight on");
@@ -357,9 +388,63 @@ void loop() {
       fillRect(0, 0, 479, 479, COLORS[colorIdx]);
       Serial.printf("cmd f: filled %s\n", NAMES[colorIdx]);
       break;
+    case 'Y':
+    case 'Z': {
+      // 切り分け: XIAO の再起動中と同じく、パネル用の線を 5 秒浮かせる。
+      // Y は LCD_CS (D2) だけ内部プルアップで High に保つ。Z は 3 本とも完全に浮かせる
+      pinMode(PIN_LCD_CS, c == 'Y' ? INPUT_PULLUP : INPUT);
+      pinMode(PIN_PANEL_SCK, INPUT);
+      pinMode(PIN_PANEL_SDA, INPUT);
+      delay(5000);
+      pinMode(PIN_LCD_CS, OUTPUT);
+      digitalWrite(PIN_LCD_CS, HIGH);
+      pinMode(PIN_PANEL_SCK, OUTPUT);
+      digitalWrite(PIN_PANEL_SCK, LOW);
+      pinMode(PIN_PANEL_SDA, OUTPUT);
+      digitalWrite(PIN_PANEL_SDA, LOW);
+      Serial.printf("cmd %c: panel lines floated 5 s%s\n", c, c == 'Y' ? " (LCD_CS pulled up)" : "");
+      break;
+    }
+    case '0': case '1': case '2': case '3': case '4': case '5': {
+      // 切り分け: LT7680 をやり直してから、パネルのソフトリセットと初期化までの待ち時間を変える
+      static const uint32_t WAITS[] = {0, 200, 500, 1000, 2000, 5000};
+      uint32_t wait = WAITS[c - '0'];
+      bool ok = initLt7680();
+      writeReg(0x12, readReg(0x12) | 0x40);
+      setupMemory();
+      fillRect(0, 0, 479, 479, COLORS[colorIdx]);
+      delay(wait);
+      resetAndInitPanel();
+      Serial.printf("cmd %c: lt7680 %s, waited %lu ms, panel SWRESET + init\n", c, ok ? "OK" : "FAILED", (unsigned long)wait);
+      break;
+    }
+    case 'V':
+    case 'X': {
+      // 切り分け: XIAO の再起動中と同じく、LT7680 側の線を 1 秒浮かせてから、#0 と同じ手順を行う。
+      // V は LCM_RESET (D1) だけ、X は LCM_RESET と LCM_SCS (D0) の両方
+      gpio_pullup_dis((gpio_num_t)PIN_RESET);
+      pinMode(PIN_RESET, INPUT);
+      if (c == 'X') pinMode(PIN_SCS, INPUT);
+      delay(1000);
+      pinMode(PIN_SCS, OUTPUT);
+      digitalWrite(PIN_SCS, HIGH);
+      pinMode(PIN_RESET, OUTPUT_OPEN_DRAIN);
+      gpio_pullup_en((gpio_num_t)PIN_RESET);
+      digitalWrite(PIN_RESET, HIGH);
+      bool ok = initLt7680();
+      writeReg(0x12, readReg(0x12) | 0x40);
+      setupMemory();
+      fillRect(0, 0, 479, 479, COLORS[colorIdx]);
+      resetAndInitPanel();
+      Serial.printf("cmd %c: floated %s 1 s, lt7680 %s, panel SWRESET + init\n", c, c == 'X' ? "D0+D1" : "D1", ok ? "OK" : "FAILED");
+      break;
+    }
+    case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.println("cmd K: filled black"); break;
+    case 'W': fillRect(0, 0, 479, 479, 0xFFFF); Serial.println("cmd W: filled white"); break;
     case 'b': bl = !bl; digitalWrite(PIN_BL, bl); Serial.printf("cmd b: backlight %s\n", bl ? "on" : "off"); break;
     case 'r':
-      Serial.printf("cmd r: STSR=0x%02X CCR=0x%02X DPCR=0x%02X 10=0x%02X\n", readStatus(), readReg(0x01), readReg(0x12), readReg(0x10));
+      Serial.printf("cmd r: STSR=0x%02X CCR=0x%02X DPCR=0x%02X 10=0x%02X reset_reason=%d power_on=%s\n",
+                    readStatus(), readReg(0x01), readReg(0x12), readReg(0x10), (int)why, powerOn ? "yes" : "no");
       break;
     default: break;
   }
