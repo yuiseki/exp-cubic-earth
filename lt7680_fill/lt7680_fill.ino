@@ -15,8 +15,8 @@ static const int PIN_BL     = D3;
 static const int PIN_SCK    = D8;
 static const int PIN_MISO   = D9;
 static const int PIN_MOSI   = D10;
-static const int PIN_PANEL_SCK = D6;  // CON1 19 LCD_SCLK
-static const int PIN_PANEL_SDA = D7;  // CON1 18 LCD_DIN
+static const int PIN_PANEL_SCK = D4;  // CON1 19 LCD_SCLK
+static const int PIN_PANEL_SDA = D5;  // CON1 18 LCD_DIN
 
 SPISettings lt(1000000, MSBFIRST, SPI_MODE3);
 

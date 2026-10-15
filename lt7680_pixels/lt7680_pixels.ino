@@ -16,8 +16,10 @@ static const int PIN_BL     = D3;
 static const int PIN_SCK    = D8;
 static const int PIN_MISO   = D9;
 static const int PIN_MOSI   = D10;
-static const int PIN_PANEL_SCK = D6;  // CON1 19 LCD_SCLK
-static const int PIN_PANEL_SDA = D7;  // CON1 18 LCD_DIN
+// パネル初期化用の線は、起動時に何も出さないピンにつなぐ。D6 (GPIO43) は UART0 の送信で、
+// 再起動のたびに ROM のログが出てパネルにでたらめなクロックが入る疑いがある (2026-10-15、確認中)
+static const int PIN_PANEL_SCK = D4;  // CON1 19 LCD_SCLK
+static const int PIN_PANEL_SDA = D5;  // CON1 18 LCD_DIN
 
 SPISettings lt(1000000, MSBFIRST, SPI_MODE3);
 
