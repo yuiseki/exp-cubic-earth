@@ -385,6 +385,7 @@ void setup() {
   digitalWrite(PIN_BL, LOW);
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
+  Serial.setTimeout(200);
   delay(1500);
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, -1);
   Serial.printf("reset reason: %d, boards: %d, select: %s\n", (int)esp_reset_reason(), NUM_BOARDS,
@@ -418,6 +419,17 @@ void loop() {
     case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.printf("cmd K: board %d black\n", curBoard); break;
     case 'W': fillRect(0, 0, 479, 479, 0xFFFF); Serial.printf("cmd W: board %d white\n", curBoard); break;
     case 'b': bl = !bl; digitalWrite(PIN_BL, bl); Serial.printf("cmd b: backlight %s\n", bl ? "on" : "off"); break;
+    case 'Q': {
+      // 1 行 "x y w h color" (10 進、color は RGB565) を読んで四角形を塗る。ISS の軌跡など、母艦からの重ね描き用
+      String line = Serial.readStringUntil('\n');
+      int x, y, w, h, col;
+      if (sscanf(line.c_str(), "%d %d %d %d %d", &x, &y, &w, &h, &col) == 5 && x >= 0 && y >= 0 && x + w <= 480 && y + h <= 480 && w > 0 && h > 0) {
+        fillRect(x, y, x + w - 1, y + h - 1, (uint16_t)col);
+      } else {
+        Serial.printf("cmd Q: bad line '%s'\n", line.c_str());
+      }
+      break;
+    }
     case 'r': Serial.printf("cmd r: board %d STSR=0x%02X CCR=0x%02X DPCR=0x%02X\n", curBoard, readStatus(), readReg(0x01), readReg(0x12)); break;
     default: Serial.printf("cmd %c: unknown\n", c); break;
   }
