@@ -194,6 +194,15 @@ bool initLt7680() {
   digitalWrite(PIN_RESET, LOW);  // LCD.cpp の HW_Reset は 100ms
   delay(LT_RESET_HOLD_MS);
   digitalWrite(PIN_RESET, HIGH);
+#ifdef BOOT_DIAG
+  // 診断: リセット解除から状態ビットが落ちるまでを 1 ms 刻みで測る (通常は 200 ms 待ってから見る)
+  {
+    uint32_t t0 = millis();
+    uint8_t st = readStatus();
+    while ((st & 0x02) && millis() - t0 < 1000) { delay(1); st = readStatus(); }
+    Serial.printf("diag: lt7680 inhibit cleared after %lu ms (STSR=0x%02X)\n", (unsigned long)(millis() - t0), st);
+  }
+#endif
   delay(200);
   if (!waitFor("normal operation", 1000, [] { return (readStatus() & 0x02) == 0; })) return false;
 
@@ -403,18 +412,32 @@ void setup() {
   // 実験 E16 (電源投入の診断): 起動からの決まった時刻に流れを 1 回ずつ行い、毎回白で塗る。
   // カメラの連続撮影で、何秒後の流れで初めて白くなるかを読む
   {
-    static const uint32_t AT_MS[] = {0, 5000, 10000, 20000, 40000, 80000};
+#ifndef BOOT_DIAG_AT
+#define BOOT_DIAG_AT 0, 5000, 10000, 20000, 40000, 80000
+#endif
+    static const uint32_t AT_MS[] = {BOOT_DIAG_AT};
+    int idx = 0;
     for (uint32_t at : AT_MS) {
       while (millis() < at) delay(10);
+      Serial.printf("diag: flow at %lu ms start at %lu ms\n", (unsigned long)at, (unsigned long)millis());
       bool ok = initLt7680();
       writeReg(0x12, readReg(0x12) | 0x40);
       setupMemory();
       fillRect(0, 0, 479, 479, 0xFFFF);
-      resetAndInitPanel();
-      delay(200);
-      resetAndInitPanel();
+#ifdef BOOT_DIAG_LT_ONLY_FIRST
+      // 最初の 1 回は LT7680 だけ起動し (クロックは出る)、パネルの初期化は送らない
+      bool panel = (idx > 0);
+#else
+      bool panel = true;
+#endif
+      if (panel) {
+        resetAndInitPanel();
+        delay(200);
+        resetAndInitPanel();
+      }
       digitalWrite(PIN_BL, HIGH);
-      Serial.printf("diag: flow at %lu ms done at %lu ms, lt7680 %s\n", (unsigned long)at, (unsigned long)millis(), ok ? "OK" : "FAILED");
+      Serial.printf("diag: flow at %lu ms done at %lu ms, lt7680 %s, panel init %s, STSR=0x%02X\n", (unsigned long)at, (unsigned long)millis(), ok ? "OK" : "FAILED", panel ? "yes" : "no", readStatus());
+      idx++;
     }
     Serial.println("shell ready");
     return;
@@ -554,6 +577,17 @@ void loop() {
   switch (c) {
     case 'G': pendingCmd = 'G'; break;
     case 'F': pendingCmd = 'F'; break;
+    case 'd': {
+      // レジスタを全部読み出す。映る状態と映らない状態で比べるため
+      Serial.println("cmd d: register dump");
+      for (int base = 0x00; base < 0x100; base += 16) {
+        Serial.printf("%02X:", base);
+        for (int i = 0; i < 16; i++) Serial.printf(" %02X", readReg(base + i));
+        Serial.println();
+      }
+      Serial.println("cmd d: end");
+      break;
+    }
     case 'E': drawEarth(); break;
     case 'm': pendingCmd = 'm'; break;
     case 'x':
