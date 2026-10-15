@@ -406,6 +406,15 @@ void setup() {
   why = esp_reset_reason();
   powerOn = (why == ESP_RST_POWERON);
   Serial.printf("reset reason: %d (%s)\n", (int)why, powerOn ? "power on" : "not power on");
+#ifdef BOOT_POR_SELF_RESTART
+  // 電源投入 (POR) ではパネルにも LT7680 にも触らず、電源が落ち着くのを待ってから自分を再起動する。
+  // 2 回目の起動 (reset reason = SW) で通常の初期化を行う。cold boot 直後の初期化が通らないため
+  if (powerOn) {
+    Serial.printf("por: no init, restarting in %d ms\n", BOOT_POR_SELF_RESTART);
+    delay(BOOT_POR_SELF_RESTART);
+    esp_restart();
+  }
+#endif
   printBootPins();
   delay(BOOT_SETTLE_MS);
 #ifdef BOOT_DIAG
