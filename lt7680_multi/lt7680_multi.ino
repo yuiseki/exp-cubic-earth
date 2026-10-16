@@ -386,6 +386,34 @@ void setup() {
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
   Serial.setTimeout(200);
+#ifdef BOOT_MINIMAL
+  // メーカー推奨どおりの最小の起動: パネルの RST は基板上の RC (10k/1uF) で、電源投入から 20〜30ms で
+  // 解除される。それを待つだけで、待ち時間の追加・流れの繰り返し・SWRESET はしない。
+  // 順序はメーカーのデモ (CTP_test.ino) と同じ: LT7680 の初期化 → ST7701S の初期化 1 回 → 表示オン
+  while (millis() < 30) delay(1);
+  uint32_t t0 = millis();
+  SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, -1);
+  curBoard = 0;
+  digitalWrite(PIN_RESET, LOW);
+  delay(LT_RESET_HOLD_MS);
+  digitalWrite(PIN_RESET, HIGH);
+  delay(100);
+  bool ok = initLt7680NoReset();
+  uint32_t t1 = millis();
+  initPanel();
+  uint32_t t2 = millis();
+  writeReg(0x12, readReg(0x12) | 0x40);  // 表示オン
+  setupMemory();
+  drawFace(EARTH_QSC480[0]);
+  digitalWrite(PIN_BL, HIGH);
+  uint32_t t3 = millis();
+  while (millis() < 3000) delay(10);  // シリアルの読み手が付いてから報告する
+  Serial.printf("reset reason: %d, boot: minimal\n", (int)esp_reset_reason());
+  Serial.printf("diag: lt7680 %s, lt init %u-%u ms, panel init %u-%u ms, earth done %u ms, STSR=0x%02X\n",
+                ok ? "OK" : "FAILED", t0, t1, t1, t2, t3, readStatus());
+  Serial.println("shell ready");
+  return;
+#endif
   delay(1500);
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, -1);
   Serial.printf("reset reason: %d, boards: %d, select: %s\n", (int)esp_reset_reason(), NUM_BOARDS,
