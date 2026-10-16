@@ -320,7 +320,7 @@ void fillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color
 
 // ---- 地球 ----
 #ifndef PIXEL_SPI_HZ
-#define PIXEL_SPI_HZ 1000000  // 画素のバーストだけの速さ。レジスタの読み書きは 1MHz のまま
+#define PIXEL_SPI_HZ 20000000  // 画素のバーストだけの速さ (480x480 で 588ms)。レジスタの読み書きは 1MHz のまま
 #endif
 uint32_t pixelHz = PIXEL_SPI_HZ;  // 命令 #S<MHz> で変えられる
 
@@ -403,7 +403,7 @@ void flowAll(uint16_t color) {
 }
 
 #ifndef BOOT_FLOWS
-#define BOOT_FLOWS 2  // XIAO だけのリセット後は 2 回目の流れで映る (E15、10/10)。電源投入は未解決
+#define BOOT_FLOWS 2  // BOOT_LEGACY_FLOWS のときだけ使う
 #endif
 
 void setup() {
@@ -420,46 +420,48 @@ void setup() {
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
   Serial.setTimeout(200);
-#ifdef BOOT_MINIMAL
-  // メーカー推奨どおりの最小の起動: パネルの RST は基板上の RC (10k/1uF) で、電源投入から 20〜30ms で
-  // 解除される。それを待つだけで、待ち時間の追加・流れの繰り返し・SWRESET はしない。
-  // 順序はメーカーのデモ (CTP_test.ino) と同じ: LT7680 の初期化 → ST7701S の初期化 1 回 → 表示オン
+#ifndef BOOT_LEGACY_FLOWS
+  // メーカー推奨どおりの起動: パネルの RST は基板上の RC (10k/1uF) で、電源投入から 20〜30ms で解除される。
+  // それを待ってから、メーカーのデモ (CTP_test.ino) と同じ順で LT7680 の初期化 → ST7701S の初期化 1 回 → 表示オン。
+  // LCD_CS がつながっていれば、待ち時間の追加・流れの繰り返し・SWRESET は要らない (USB-C 抜き差しで全回映る)
   while (millis() < 30) delay(1);
   uint32_t t0 = millis();
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, -1);
-  curBoard = 0;
-  digitalWrite(PIN_RESET, LOW);
+  digitalWrite(PIN_RESET, LOW);  // LCM_RESET は全基板で共通
   delay(LT_RESET_HOLD_MS);
   digitalWrite(PIN_RESET, HIGH);
   delay(100);
-  bool ok = initLt7680NoReset();
-  uint32_t t1 = millis();
-  initPanel();
-  uint32_t t2 = millis();
-  writeReg(0x12, readReg(0x12) | 0x40);  // 表示オン
-  setupMemory();
-  drawFace(EARTH_QSC480[0]);
+  bool ok[NUM_BOARDS];
+  for (int b = 0; b < NUM_BOARDS; b++) {
+    curBoard = b;
+    ok[b] = initLt7680NoReset();
+    initPanel();
+    writeReg(0x12, readReg(0x12) | 0x40);  // 表示オン
+    setupMemory();
+    drawFace(EARTH_QSC480[0]);
+  }
+  curBoard = 0;
   digitalWrite(PIN_BL, HIGH);
-  uint32_t t3 = millis();
+  uint32_t t1 = millis();
   while (millis() < 3000) delay(10);  // シリアルの読み手が付いてから報告する
-  Serial.printf("reset reason: %d, boot: minimal\n", (int)esp_reset_reason());
-  Serial.printf("diag: lt7680 %s, lt init %u-%u ms, panel init %u-%u ms, earth done %u ms, STSR=0x%02X\n",
-                ok ? "OK" : "FAILED", t0, t1, t1, t2, t3, readStatus());
-  Serial.println("shell ready");
-  return;
+  Serial.printf("reset reason: %d, boards: %d, select: %s, pixel SPI %lu Hz\n", (int)esp_reset_reason(), NUM_BOARDS,
+#ifdef BOARD_SELECT_DIRECT
+                "direct",
+#else
+                "74HC138",
 #endif
+                (unsigned long)pixelHz);
+  for (int b = 0; b < NUM_BOARDS; b++) Serial.printf("diag: board %d lt7680 %s\n", b, ok[b] ? "OK" : "FAILED");
+  Serial.printf("diag: boot %u-%u ms, STSR=0x%02X\n", t0, t1, readStatus());
+#else
+  // 以前の起動 (LCD_CS が抜けていた頃の対症療法): 1.5 秒待ってから「流れ」を BOOT_FLOWS 回
   delay(1500);
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, -1);
-  Serial.printf("reset reason: %d, boards: %d, select: %s\n", (int)esp_reset_reason(), NUM_BOARDS,
-#ifdef BOARD_SELECT_DIRECT
-                "direct");
-#else
-                "74HC138");
-#endif
   for (int f = 0; f < BOOT_FLOWS; f++) flowAll(0x07E0);
   for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; drawFace(EARTH_QSC480[0]); }
   curBoard = 0;
   digitalWrite(PIN_BL, HIGH);
+#endif
   Serial.println("shell ready");
 }
 
@@ -488,6 +490,7 @@ void loop() {
     case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.printf("cmd K: board %d black\n", curBoard); break;
     case 'W': fillRect(0, 0, 479, 479, 0xFFFF); Serial.printf("cmd W: board %d white\n", curBoard); break;
     case 'b': bl = !bl; digitalWrite(PIN_BL, bl); Serial.printf("cmd b: backlight %s\n", bl ? "on" : "off"); break;
+#ifdef BOARD_SELECT_DIRECT  // 74HC138 経由では CS を 1 本ずつ浮かせられない
     case 'P': {
       // 基板側のプルアップ/プルダウンの有無: 内蔵プルダウンで 1 なら外部プルアップ、内蔵プルアップで 0 なら外部プルダウン。
       // 他の 2 本は既定の待機状態 (CS High、SCLK/DIN Low) に保ったまま 1 本ずつ調べる
@@ -507,6 +510,7 @@ void loop() {
       }
       break;
     }
+#endif
     case 'Q': {
       // 1 行 "x y w h color" (10 進、color は RGB565) を読んで四角形を塗る。ISS の軌跡など、母艦からの重ね描き用
       String line = Serial.readStringUntil('\n');
