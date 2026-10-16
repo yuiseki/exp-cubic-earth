@@ -447,6 +447,25 @@ void loop() {
     case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.printf("cmd K: board %d black\n", curBoard); break;
     case 'W': fillRect(0, 0, 479, 479, 0xFFFF); Serial.printf("cmd W: board %d white\n", curBoard); break;
     case 'b': bl = !bl; digitalWrite(PIN_BL, bl); Serial.printf("cmd b: backlight %s\n", bl ? "on" : "off"); break;
+    case 'P': {
+      // 基板側のプルアップ/プルダウンの有無: 内蔵プルダウンで 1 なら外部プルアップ、内蔵プルアップで 0 なら外部プルダウン。
+      // 他の 2 本は既定の待機状態 (CS High、SCLK/DIN Low) に保ったまま 1 本ずつ調べる
+      const int pins[3] = {PIN_LCD_CS, PIN_PANEL_SCK, PIN_PANEL_SDA};
+      const char *names[3] = {"LCD_CS", "LCD_SCLK", "LCD_DIN"};
+      for (int k = 0; k < 3; k++) {
+        pinMode(pins[k], INPUT_PULLDOWN);
+        delay(5);
+        int withDown = digitalRead(pins[k]);
+        pinMode(pins[k], INPUT_PULLUP);
+        delay(5);
+        int withUp = digitalRead(pins[k]);
+        pinMode(pins[k], OUTPUT);
+        digitalWrite(pins[k], pins[k] == PIN_LCD_CS ? HIGH : LOW);
+        Serial.printf("cmd P: %s pulldown->%d pullup->%d (%s)\n", names[k], withDown, withUp,
+                      withDown ? "external pull-up" : !withUp ? "external pull-down" : "no external pull");
+      }
+      break;
+    }
     case 'Q': {
       // 1 行 "x y w h color" (10 進、color は RGB565) を読んで四角形を塗る。ISS の軌跡など、母艦からの重ね描き用
       String line = Serial.readStringUntil('\n');
