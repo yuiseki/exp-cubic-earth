@@ -313,7 +313,9 @@ void fillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color
 }
 
 // ---- 地球 ----
-static const uint32_t PIXEL_SPI_HZ = 1000000;
+#ifndef PIXEL_SPI_HZ
+#define PIXEL_SPI_HZ 1000000  // 画素のバーストだけの速さ。レジスタの読み書きは 1MHz のまま
+#endif
 
 // 選んだ基板の表示用メモリに face を書く (64 バイトのバースト、480x480 で約 4.1 秒)
 void drawFace(const uint16_t *face) {
