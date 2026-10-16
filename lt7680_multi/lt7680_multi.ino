@@ -222,6 +222,10 @@ static const int VBP = 20, VFP = 12, VPW = 3;   // LCD.h の LCD_VBPD/VFPD/VSPW
 #define LT_RESET_HOLD_MS 100
 #endif
 
+#ifndef SDRAM_ITV
+#define SDRAM_ITV 486
+#endif
+
 bool initLt7680NoReset() {
   if (!waitFor("normal operation", 1000, [] { return (readStatus() & 0x02) == 0; })) return false;
 
@@ -239,8 +243,10 @@ bool initLt7680NoReset() {
   writeReg(0xE4, 0x04);
   writeReg(0xE0, 0x29);
   writeReg(0xE1, 0x03);
-  writeReg(0xE2, 0x1A);
-  writeReg(0xE3, 0x06);
+  // SDRAM のリフレッシュ間隔。LCD.cpp の SDRAM_initail と同じ (64ms / 8192 行 / (1000/60) - 2 = 486)。
+  // 以前の 0x61A (1562) では、書いた画素が数十秒で 1 ビットずつ化けていった
+  writeReg(0xE2, SDRAM_ITV & 0xFF);
+  writeReg(0xE3, SDRAM_ITV >> 8);
   writeReg(0xE4, 0x05);
   if (!waitFor("display RAM ready", 1000, [] { return (readStatus() & 0x04) != 0; })) return false;
 
@@ -316,6 +322,7 @@ void fillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color
 #ifndef PIXEL_SPI_HZ
 #define PIXEL_SPI_HZ 1000000  // 画素のバーストだけの速さ。レジスタの読み書きは 1MHz のまま
 #endif
+uint32_t pixelHz = PIXEL_SPI_HZ;  // 命令 #S<MHz> で変えられる
 
 // 選んだ基板の表示用メモリに face を書く (64 バイトのバースト、480x480 で約 4.1 秒)
 void drawFace(const uint16_t *face) {
@@ -326,7 +333,7 @@ void drawFace(const uint16_t *face) {
   writeReg16(0x5F, 0);
   writeReg16(0x61, 0);
   xfer16(0x00, 0x04);
-  SPISettings fast(PIXEL_SPI_HZ, MSBFIRST, SPI_MODE3);
+  SPISettings fast(pixelHz, MSBFIRST, SPI_MODE3);
   uint8_t buf[64];
   int n = 0;
   uint32_t t0 = millis();
@@ -347,6 +354,31 @@ void drawFace(const uint16_t *face) {
     }
   }
   Serial.printf("board %d: face written in %lu ms\n", curBoard, (unsigned long)(millis() - t0));
+}
+
+// 選んだ基板の表示用メモリを全画素読み返し、face と照合する (1MHz、約 20 秒)。
+// ポートを選び直した直後の 1 回は捨てる (データシート REG[04h] Note1)
+uint32_t verifyFace(const uint16_t *face) {
+  writeReg16(0x56, 0);
+  writeReg16(0x58, 0);
+  writeReg16(0x5A, 480);
+  writeReg16(0x5C, 480);
+  writeReg16(0x5F, 0);
+  writeReg16(0x61, 0);
+  xfer16(0x00, 0x04);
+  xfer16(0xC0, 0x00);  // ダミー
+  uint32_t bad = 0, t0 = millis();
+  for (uint32_t i = 0; i < 480u * 480u; i++) {
+    uint16_t lo = xfer16(0xC0, 0x00), hi = xfer16(0xC0, 0x00);
+    uint16_t got = lo | (hi << 8);
+    if (got != face[i] && bad++ < 5) {
+      Serial.printf("verify NG at (%lu,%lu): got 0x%04X want 0x%04X\n", (unsigned long)(i % 480),
+                    (unsigned long)(i / 480), got, face[i]);
+    }
+  }
+  Serial.printf("board %d: verify %lu bad pixels of %u in %lu ms\n", curBoard, (unsigned long)bad, 480u * 480u,
+                (unsigned long)(millis() - t0));
+  return bad;
 }
 
 // ---- 起動の流れ ----
@@ -446,6 +478,13 @@ void loop() {
       break;
     case 'A': flowAll(0x07E0); Serial.println("cmd A: flow on all boards"); break;
     case 'E': drawFace(EARTH_QSC480[0]); break;
+    case 'V': verifyFace(EARTH_QSC480[0]); break;
+    case 'S': {
+      long mhz = Serial.parseInt();
+      if (mhz >= 1 && mhz <= 40) pixelHz = mhz * 1000000;
+      Serial.printf("cmd S: pixel SPI %lu Hz\n", (unsigned long)pixelHz);
+      break;
+    }
     case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.printf("cmd K: board %d black\n", curBoard); break;
     case 'W': fillRect(0, 0, 479, 479, 0xFFFF); Serial.printf("cmd W: board %d white\n", curBoard); break;
     case 'b': bl = !bl; digitalWrite(PIN_BL, bl); Serial.printf("cmd b: backlight %s\n", bl ? "on" : "off"); break;
