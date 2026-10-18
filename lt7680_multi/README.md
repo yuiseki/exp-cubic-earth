@@ -15,12 +15,16 @@ arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3 --output-dir build/direct \
 arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3 --output-dir build/hc138x2 \
   --build-property "compiler.cpp.extra_flags=-DNUM_BOARDS=2" lt7680_multi
 
+# 構成 3: XIAO ESP32-S3 + 74HC138 で 3 枚
+arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3 --output-dir build/hc138x3 \
+  --build-property "compiler.cpp.extra_flags=-DNUM_BOARDS=3" lt7680_multi
+
 # 書き込み (別のファームが載っていた XIAO には、起動ローダーごと merged.bin を 0x0 に)
 esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset \
   write-flash -z 0x0 build/hc138x2/lt7680_multi.ino.merged.bin
 ```
 
-旗を付けないと 74HC138 で 1 枚 (`NUM_BOARDS=1`)。`-DNUM_BOARDS=3` で 3 枚 (ビルドのみ確認)。
+旗を付けないと 74HC138 で 1 枚 (`NUM_BOARDS=1`)。
 
 ### 構成 1: 直結で 1 枚
 
@@ -38,9 +42,17 @@ esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset \
   - 2 枚 (`NUM_BOARDS=2`): 両方 `lt7680 OK`、`boot 30-1833 ms`。基板 0 と 1 を交互に選んで `#r` を読んでも STSR=0x54 のままで、LCM_SDO (MISO) の共有で読みは化けなかった。片方を白・片方を黒に塗り、入れ替えると入れ替わる (カメラ)。USB-C の抜き差し 3/3 で 2 枚ともすぐに映る (本人の目視)
   - 2 枚に別々の面: 基板 1 を基板 0 の左に並べ、基板 0 に面 0、基板 1 に面 3 を描くと、インドから東南アジアへ境目で地図がつながった (カメラ)
   - 面の割り当て `x,n`: `1,3` で基板 1 が面 3 になり、再起動後も面 3 で起動した。範囲外 (`1,7`、`5,0`) は断る
-- 3 枚にする前に確かめること:
-  - 電源: 2 枚までは XIAO の USB (VBUS) からで動いたが、余裕は測っていない。3 枚分の LT7680 + SDRAM + バックライトは 5V を外から入れる
-  - MISO の共有: 3 枚目を足したら、各基板を選んで `#r` の STSR が 0x50/0x54 のままかを見る。化けるなら MISO だけ別のセレクタで切り替えるか、状態の読み返しをやめて時間待ちにする
+
+### 構成 3: 74HC138 で 3 枚
+
+- 構成 2 に基板 2 を足す。基板 2 の LT7680 は番地 2 (Y2)、パネルは 5 (Y5)。74HC138 の出力 8 本のうち基板ごとに 2 本と待機の 1 本を使うので、3 枚が上限
+- 確認済み (2026-10-18):
+  - 起動ログは `boards: 3`、3 枚とも `lt7680 OK` で、電源投入から 3 枚目の地球まで約 2.6 秒 (1 枚あたり約 0.8 秒)
+  - USB-C の抜き差し 3/3 で 3 枚ともすぐに映る (本人の目視)
+  - 3 枚とも、`#r` を 40 回読んで 40 回 STSR=0x54、CCR=0xC8、DPCR=0x40。LCM_SDO (MISO) の 3 枚共有で読みは化けない
+  - 面の割り当て: 基板 0 に面 0、基板 1 に面 3、基板 2 に面 5 (南極、`2,5`) で 3 枚とも映った (カメラ)
+  - 電源は XIAO の USB (VBUS) から 3 枚分 (バックライト込み) で動いている。XIAO の起動理由に電圧低下は出ていない。基板側の 5V は測っていない
+- つないだ直後は基板 2 だけ起動時に初期化が失敗し、バックライトを消すと基板 2 だけリセットされる症状があった。配線を確かめ直したあとは再現していない (`WIRING.md` の「はまったところ」)
 
 ## 命令 (先頭に `#`)
 
