@@ -10,8 +10,13 @@
 //
 // 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、K/W 黒/白、r 状態、b バックライト
 
-#include "earth_qsc480.h"
+#include "earth_qsc480x4.h"
 #include <SPI.h>
+
+// 基板 b には側面 b を描く (面 0 は東京 139.767 度を中心に、経度 90 度おきに東へ)。
+// 立方体の外から見て、基板 b+1 を基板 b の右隣に置くとつながる
+// (関数にすると Arduino の自動プロトタイプがここに入り、後ろの enum より前に来てビルドが壊れる)
+#define boardFace(b) (EARTH_QSC480X4[(b) % 4])
 
 #ifndef NUM_BOARDS
 #define NUM_BOARDS 1
@@ -438,7 +443,7 @@ void setup() {
     initPanel();
     writeReg(0x12, readReg(0x12) | 0x40);  // 表示オン
     setupMemory();
-    drawFace(EARTH_QSC480[0]);
+    drawFace(boardFace(curBoard));
   }
   curBoard = 0;
   digitalWrite(PIN_BL, HIGH);
@@ -458,7 +463,7 @@ void setup() {
   delay(1500);
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, -1);
   for (int f = 0; f < BOOT_FLOWS; f++) flowAll(0x07E0);
-  for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; drawFace(EARTH_QSC480[0]); }
+  for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; drawFace(boardFace(curBoard)); }
   curBoard = 0;
   digitalWrite(PIN_BL, HIGH);
 #endif
@@ -479,8 +484,8 @@ void loop() {
       if (c - '0' < NUM_BOARDS) { curBoard = c - '0'; Serial.printf("cmd %c: board %d selected\n", c, curBoard); }
       break;
     case 'A': flowAll(0x07E0); Serial.println("cmd A: flow on all boards"); break;
-    case 'E': drawFace(EARTH_QSC480[0]); break;
-    case 'V': verifyFace(EARTH_QSC480[0]); break;
+    case 'E': drawFace(boardFace(curBoard)); break;
+    case 'V': verifyFace(boardFace(curBoard)); break;
     case 'S': {
       long mhz = Serial.parseInt();
       if (mhz >= 1 && mhz <= 40) pixelHz = mhz * 1000000;

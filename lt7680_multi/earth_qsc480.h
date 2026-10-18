@@ -1,1 +1,0 @@
-../lt7680_earth/earth_qsc480.h
