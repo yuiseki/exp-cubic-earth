@@ -492,6 +492,12 @@ void loop() {
       Serial.printf("cmd S: pixel SPI %lu Hz\n", (unsigned long)pixelHz);
       break;
     }
+    case 'F': {  // 選んだ基板に面 n (0〜3) を描く。並べ方を試す用
+      long n = Serial.parseInt();
+      if (n >= 0 && n <= 3) { Serial.printf("cmd F: board %d face %ld\n", curBoard, n); drawFace(EARTH_QSC480X4[n]); }
+      else Serial.println("cmd F: face must be 0-3");
+      break;
+    }
     case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.printf("cmd K: board %d black\n", curBoard); break;
     case 'W': fillRect(0, 0, 479, 479, 0xFFFF); Serial.printf("cmd W: board %d white\n", curBoard); break;
     case 'b': bl = !bl; digitalWrite(PIN_BL, bl); Serial.printf("cmd b: backlight %s\n", bl ? "on" : "off"); break;
