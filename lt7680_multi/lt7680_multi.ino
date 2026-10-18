@@ -541,6 +541,12 @@ void loop() {
       else Serial.println("cmd F: face must be 0-5");
       break;
     }
+    case 'I': {  // 選んだ基板だけ初期化し直す (LCM_RESET は全基板共通なので出さない)
+      bool ok = initLt7680NoReset();
+      Serial.printf("cmd I: board %d lt7680 %s, STSR=0x%02X\n", curBoard, ok ? "OK" : "FAILED", readStatus());
+      if (ok) { initPanel(); writeReg(0x12, readReg(0x12) | 0x40); setupMemory(); drawFace(boardFace(curBoard)); }
+      break;
+    }
     case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.printf("cmd K: board %d black\n", curBoard); break;
     case 'W': fillRect(0, 0, 479, 479, 0xFFFF); Serial.printf("cmd W: board %d white\n", curBoard); break;
     case 'b': bl = !bl; digitalWrite(PIN_BL, bl); Serial.printf("cmd b: backlight %s\n", bl ? "on" : "off"); break;
