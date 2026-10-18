@@ -68,12 +68,12 @@ void selectSetup() {
   selectLine(SEL_NONE);
 }
 
-SPISettings lt(1000000, MSBFIRST, SPI_MODE3);
+uint32_t regHz = 1000000;  // レジスタの読み書きの速さ。#L<kHz> で変える
 
 // ---- LT7680 (4 線 SPI、1 回 16 クロック、先頭 8 ビットが前置き) ----
 
 uint8_t xfer16(uint8_t prefix, uint8_t data) {
-  SPI.beginTransaction(lt);
+  SPI.beginTransaction(SPISettings(regHz, MSBFIRST, SPI_MODE3));
   selectLine(SEL_LT);
   SPI.transfer(prefix);
   uint8_t r = SPI.transfer(data);
@@ -545,6 +545,12 @@ void loop() {
       bool ok = initLt7680NoReset();
       Serial.printf("cmd I: board %d lt7680 %s, STSR=0x%02X\n", curBoard, ok ? "OK" : "FAILED", readStatus());
       if (ok) { initPanel(); writeReg(0x12, readReg(0x12) | 0x40); setupMemory(); drawFace(boardFace(curBoard)); }
+      break;
+    }
+    case 'L': {
+      long khz = Serial.parseInt();
+      if (khz >= 10 && khz <= 10000) regHz = khz * 1000;
+      Serial.printf("cmd L: register SPI %lu Hz\n", (unsigned long)regHz);
       break;
     }
     case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.printf("cmd K: board %d black\n", curBoard); break;
