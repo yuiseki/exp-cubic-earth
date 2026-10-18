@@ -24,6 +24,8 @@ ap.add_argument("--step", type=float, default=90.0,
                 help="面の中心経度の間隔 (deg)")
 ap.add_argument("--name", default="EARTH_QSC", help="C配列名")
 ap.add_argument("--size", type=int, default=240)
+ap.add_argument("--poles", action="store_true",
+                help="側面のあとに北極面・南極面を足す (下辺/上辺が面 0 の上辺/下辺につながる向き)")
 args = ap.parse_args()
 
 img = Image.open(args.src).convert("RGB")
@@ -58,11 +60,11 @@ def sample(lon_deg, lat_deg):
     return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
 
 
-def render_face(lon0):
-    """中心 (0, lon0) の QSC 面を N x N で描く"""
-    p = Proj(f"+proj=qsc +R=1 +lat_0=0 +lon_0={lon0}")
-    # 面の半幅 L: 面の右端 (lon0+45, lat 0) の x 座標
-    L, _ = p(lon0 + 45.0, 0.0)
+def render_face(lon0, lat0=0):
+    """中心 (lat0, lon0) の QSC 面を N x N で描く。lat0=90/-90 は極の面"""
+    p = Proj(f"+proj=qsc +R=1 +lat_0={lat0} +lon_0={lon0}")
+    # 面の半幅 L: 赤道の面の右端 (lon0+45, lat 0) の x 座標 (どの面も同じ)
+    L, _ = Proj(f"+proj=qsc +R=1 +lat_0=0 +lon_0={lon0}")(lon0 + 45.0, 0.0)
     # ピクセル中心の投影座標グリッドを作って一括逆変換
     xs, ys = [], []
     for j in range(N):
@@ -77,19 +79,25 @@ def render_face(lon0):
 
 centers = [args.lon0 + args.step * k for k in range(args.count)]
 faces = [render_face(c) for c in centers]
+labels = ["lon %.3f" % (c % 360) for c in centers]
+if args.poles:
+    # PROJ の極の面は lon_0 の経線が下 (北極) / 上 (南極) を向くので、回さずに面 0 とつながる
+    faces += [render_face(args.lon0, 90), render_face(args.lon0, -90)]
+    labels += ["north pole", "south pole"]
 
 with open(args.dst, "w") as f:
     f.write("#pragma once\n#include <stdint.h>\n")
     f.write("// NASA Blue Marble 2002 -> QSC (Quadrilateralized Spherical Cube)\n")
     f.write("// side faces, centers (lat=0): " +
-            ", ".join("%.3f" % (c % 360) for c in centers) + " deg lon\n")
+            ", ".join("%.3f" % (c % 360) for c in centers) + " deg lon" +
+            (", then north and south pole faces" if args.poles else "") + "\n")
     f.write("static const uint16_t %s[%d][%d * %d] = {\n"
-            % (args.name, args.count, N, N))
+            % (args.name, len(faces), N, N))
     for fi, vals in enumerate(faces):
-        f.write("{ // face %d: lon %.3f\n" % (fi, centers[fi] % 360))
+        f.write("{ // face %d: %s\n" % (fi, labels[fi]))
         for i in range(0, len(vals), 12):
             f.write("  " + ",".join("0x%04X" % v for v in vals[i:i + 12]) + ",\n")
         f.write("},\n")
     f.write("};\n")
 
-print("wrote", args.dst, "faces:", ["%.3f" % (c % 360) for c in centers])
+print("wrote", args.dst, "faces:", labels)

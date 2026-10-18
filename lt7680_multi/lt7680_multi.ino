@@ -9,18 +9,24 @@
 // 注意: LCM_SDO (MISO) の共有は、非選択の LT7680 が SDO をハイインピーダンスにする場合だけ成立する (未確認)
 //
 // 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、K/W 黒/白、r 状態、b バックライト
+// 面の割り当て (先頭の '#' は無くてよい): x,n で基板 x に面 n (0-5) を割り当てて描く。不揮発領域に保存し、再起動後も使う
 
-#include "earth_qsc480x4.h"
+#include "earth_qsc480x6.h"
+#include <Preferences.h>
 #include <SPI.h>
-
-// 基板 b には側面 b を描く (面 0 は東京 139.767 度を中心に、経度 90 度おきに東へ)。
-// 立方体の外から見て、基板 b+1 を基板 b の右隣に置くとつながる
-// (関数にすると Arduino の自動プロトタイプがここに入り、後ろの enum より前に来てビルドが壊れる)
-#define boardFace(b) (EARTH_QSC480X4[(b) % 4])
 
 #ifndef NUM_BOARDS
 #define NUM_BOARDS 1
 #endif
+
+// QSC の面: 0〜3 は側面 (面 0 は東京 139.767 度を中心に、経度 90 度おきに東へ)、4 は北極、5 は南極。
+// 立方体の外から見て、面 k+1 は面 k の右隣、北極は面 0 の上、南極は面 0 の下につながる
+#define NUM_FACES 6
+// 基板ごとの面。既定は基板 b に側面 b、x,n 命令で変えて不揮発領域 ("cube" の "f<b>") に保存する
+int faceOf[NUM_BOARDS];
+Preferences prefs;
+// (関数にすると Arduino の自動プロトタイプがここに入り、後ろの enum より前に来てビルドが壊れる)
+#define boardFace(b) (EARTH_QSC480X6[faceOf[b]])
 
 static const int PIN_RESET  = D1;
 static const int PIN_BL     = D3;
@@ -431,6 +437,7 @@ void setup() {
   // LCD_CS がつながっていれば、待ち時間の追加・流れの繰り返し・SWRESET は要らない (USB-C 抜き差しで全回映る)
   while (millis() < 30) delay(1);
   uint32_t t0 = millis();
+  loadFaces();
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, -1);
   digitalWrite(PIN_RESET, LOW);  // LCM_RESET は全基板で共通
   delay(LT_RESET_HOLD_MS);
@@ -456,11 +463,12 @@ void setup() {
                 "74HC138",
 #endif
                 (unsigned long)pixelHz);
-  for (int b = 0; b < NUM_BOARDS; b++) Serial.printf("diag: board %d lt7680 %s\n", b, ok[b] ? "OK" : "FAILED");
+  for (int b = 0; b < NUM_BOARDS; b++) Serial.printf("diag: board %d lt7680 %s, face %d\n", b, ok[b] ? "OK" : "FAILED", faceOf[b]);
   Serial.printf("diag: boot %u-%u ms, STSR=0x%02X\n", t0, t1, readStatus());
 #else
   // 以前の起動 (LCD_CS が抜けていた頃の対症療法): 1.5 秒待ってから「流れ」を BOOT_FLOWS 回
   delay(1500);
+  loadFaces();
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, -1);
   for (int f = 0; f < BOOT_FLOWS; f++) flowAll(0x07E0);
   for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; drawFace(boardFace(curBoard)); }
@@ -473,10 +481,45 @@ void setup() {
 bool armed = false;
 bool bl = true;
 
+void loadFaces() {
+  prefs.begin("cube", true);
+  for (int b = 0; b < NUM_BOARDS; b++) {
+    char key[4] = {'f', (char)('0' + b), 0};
+    int n = prefs.getInt(key, b % 4);
+    faceOf[b] = (n >= 0 && n < NUM_FACES) ? n : b % 4;
+  }
+  prefs.end();
+}
+
+// x,n の x を読んだあと: ',' が来れば面番号を読んで割り当てる。来なければ false
+bool assignFace(int x) {
+  uint32_t t = millis();
+  while (!Serial.available() && millis() - t < 50) delay(1);
+  if (Serial.peek() != ',') return false;
+  Serial.read();
+  long n = Serial.parseInt();
+  if (x >= NUM_BOARDS || n < 0 || n >= NUM_FACES) {
+    Serial.printf("assign: board must be 0-%d, face 0-%d\n", NUM_BOARDS - 1, NUM_FACES - 1);
+    return true;
+  }
+  faceOf[x] = n;
+  char key[4] = {'f', (char)('0' + x), 0};
+  prefs.begin("cube", false);
+  prefs.putInt(key, n);
+  prefs.end();
+  int keep = curBoard;
+  curBoard = x;
+  Serial.printf("assign: board %d face %ld (saved)\n", x, n);
+  drawFace(boardFace(x));
+  curBoard = keep;
+  return true;
+}
+
 void loop() {
   if (!Serial.available()) { delay(5); return; }
   char c = Serial.read();
   if (c == '#') { armed = true; return; }
+  if (c >= '0' && c <= '9' && assignFace(c - '0')) { armed = false; return; }  // x,n (# の有無を問わない)
   if (!armed) return;
   armed = false;
   switch (c) {
@@ -494,8 +537,8 @@ void loop() {
     }
     case 'F': {  // 選んだ基板に面 n (0〜3) を描く。並べ方を試す用
       long n = Serial.parseInt();
-      if (n >= 0 && n <= 3) { Serial.printf("cmd F: board %d face %ld\n", curBoard, n); drawFace(EARTH_QSC480X4[n]); }
-      else Serial.println("cmd F: face must be 0-3");
+      if (n >= 0 && n < NUM_FACES) { Serial.printf("cmd F: board %d face %ld\n", curBoard, n); drawFace(EARTH_QSC480X6[n]); }
+      else Serial.println("cmd F: face must be 0-5");
       break;
     }
     case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.printf("cmd K: board %d black\n", curBoard); break;
