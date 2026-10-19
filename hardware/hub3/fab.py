@@ -21,8 +21,9 @@ LAYERS = "F.Cu,B.Cu,F.Paste,B.Paste,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts"
 # JLCPCB's zero rotation differs from KiCad's for some footprints. Seen in
 # JLCPCB's placement preview (2026-10-19): the SOIC-16 at KiCad's 90 showed
 # up standing on end, pin 1 at the lower right; at 0 it lies like the pads,
-# pin 1 at the lower left.
-JLC_ROTATION_OFFSET = {"SOIC-16_3.9x9.9mm_P1.27mm": -90}
+# pin 1 at the lower left. The 1x7 socket at KiCad's 0 and 180 (standing,
+# as on our board) showed up lying across; it has no polarity, so +90.
+JLC_ROTATION_OFFSET = {"SOIC-16_3.9x9.9mm_P1.27mm": -90, "PinSocket_1x07_P2.54mm_Vertical": 90}
 # JLCPCB places a part by its centre. KiCad's pin sockets have their origin
 # on pin 1, so give the centre of their pads instead.
 JLC_CENTRE_FROM_PADS = {"PinSocket_1x07_P2.54mm_Vertical"}
