@@ -2,7 +2,7 @@
 
     /usr/bin/python3 route.py [path/to/freerouting]
 
-Exports the board as Specctra DSN, runs Freerouting headless, imports the
+Starts from the unrouted board make.py leaves in build/, exports it as Specctra DSN, runs Freerouting headless, imports the
 session back and fills the zones. The intermediate files go to build/.
 Freerouting defaults to ~/.local/share/freerouting/2.4.1/... (the Linux
 bundle with its own Java runtime; the plain jar needs Java 25).
@@ -15,6 +15,10 @@ import pcbnew
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PCB = os.path.join(HERE, "hub3.kicad_pcb")
+# Power tracks may neck down to 0.45mm where they enter an FFC connector's
+# 1.0mm-pitch pads: about 2.5mm per connector, three connectors.
+NARROW_POWER_MM = 7.5
+UNROUTED = os.path.join(HERE, "build", "hub3-unrouted.kicad_pcb")  # written by make.py
 FREEROUTING = os.path.expanduser("~/.local/share/freerouting/2.4.1/freerouting-2.4.1-linux-x64/bin/freerouting")
 
 
@@ -34,19 +38,23 @@ def main():
     if "--once" in sys.argv:
         args = [a for a in sys.argv[1:] if a != "--once"]
         board = route_once(args[0] if args else FREEROUTING)
-        sys.exit(0 if narrow_power_mm(board) <= 5.0 else 3)
+        sys.exit(0 if narrow_power_mm(board) <= NARROW_POWER_MM else 3)
     # Each attempt runs in its own process: pcbnew's SWIG objects do not
     # survive loading and editing the board a second time in one process.
-    # Freerouting does not route the same board the same way twice, and now
-    # and then leaves an island or a gap, or necks a power track down for
-    # long; route again until KiCad's DRC is clean and the necks are short.
+    # Freerouting routes the same DSN the same way every time (whatever its
+    # thread count, update strategy or the order of the nets), but the DSN
+    # changes with the random ids make.py's board gets, and now and then a
+    # board routes with a gap or long necks on the power tracks. So when an
+    # attempt is not clean, make the board again and route that.
     for attempt in range(1, 9):
+        if attempt > 1:
+            subprocess.run([sys.executable, os.path.join(HERE, "make.py")], check=True, capture_output=True)
         once = subprocess.run([sys.executable, os.path.abspath(__file__), "--once", *sys.argv[1:]])
         if once.returncode == 0 and drc_clean():
             print(f"clean after attempt {attempt}")
             return
         why = "long narrow power track" if once.returncode == 3 else ("routing failed" if once.returncode else "DRC not clean")
-        print(f"attempt {attempt}: {why}, routing again")
+        print(f"attempt {attempt}: {why}; making the board again")
     sys.exit("no clean routing in 8 attempts; see build/drc.rpt")
 
 
@@ -54,9 +62,8 @@ def route_once(fr):
     build = os.path.join(HERE, "build")
     os.makedirs(build, exist_ok=True)
     dsn, ses = os.path.join(build, "hub3.dsn"), os.path.join(build, "hub3.ses")
-    board = pcbnew.LoadBoard(PCB)
-    for t in list(board.GetTracks()):
-        board.Remove(t)
+    board = pcbnew.LoadBoard(UNROUTED)
+    assert len(board.GetTracks()) == 0, f"{UNROUTED} has tracks; run make.py again"
     # Route GND as tracks too: with the zones in the DSN Freerouting leaves
     # GND to them, and the top zone breaks into islands between the tracks.
     zones = list(board.Zones())

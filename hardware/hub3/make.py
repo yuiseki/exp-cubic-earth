@@ -22,7 +22,7 @@ import pcbnew
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "hub3"
 KICAD = "/usr/share/kicad"
-SIZE = 42.0  # square board, mm
+SIZE = 44.0  # square board, mm
 ORIGIN = (100.0, 100.0)  # board's top left corner on the PCB sheet
 
 # --- nets -------------------------------------------------------------------
@@ -65,15 +65,16 @@ def ffc(board):
 # --- parts ------------------------------------------------------------------
 # ref: (symbol, value, footprint, LCSC part, pin -> net, (x, y, rotation) on the board relative to its top left corner)
 C = SIZE / 2
-FFC_FP = "cubic-earth:FFC_1.0mm_20P_Bottom_C2998680"
+FFC_FP = "cubic-earth:FFC_1.0mm_20P_Bottom_C132515"
+FFC_DEPTH = 5.4  # the connector body; its cable opening is flush with the board edge
 PARTS = {
-    "J1": ("cubic-earth:FFC_20P", "LCD0", FFC_FP, "C2998680", ffc(0), (5.5, C, 90)),
-    "J2": ("cubic-earth:FFC_20P", "LCD1", FFC_FP, "C2998680", ffc(1), (C, 5.5, 0)),
-    "J3": ("cubic-earth:FFC_20P", "LCD2", FFC_FP, "C2998680", ffc(2), (SIZE - 5.5, C, -90)),
+    "J1": ("cubic-earth:FFC_20P", "LCD0", FFC_FP, "C132515", ffc(0), (FFC_DEPTH, C, 90)),
+    "J2": ("cubic-earth:FFC_20P", "LCD1", FFC_FP, "C132515", ffc(1), (C, FFC_DEPTH, 0)),
+    "J3": ("cubic-earth:FFC_20P", "LCD2", FFC_FP, "C132515", ffc(2), (SIZE - FFC_DEPTH, C, -90)),
     "U1": ("74xx:74HC138", "74HC138", "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm", "C2674688", HC138, (C, 14.0, 90)),
     "U2": ("cubic-earth:XIAO_ESP32S3", "XIAO ESP32S3", "cubic-earth:XIAO_Socket_2x7_P2.54mm", "", XIAO, (C, SIZE - 10.6, 0)),
     "C1": ("Device:C", "100nF", "Capacitor_SMD:C_0603_1608Metric", "C14663", {1: "+3V3", 2: "GND"}, (C + 7.5, 14.0, 90)),
-    "C2": ("Device:C", "10uF", "Capacitor_SMD:C_0805_2012Metric", "C15850", {1: "+5V", 2: "GND"}, (33.4, SIZE - 4.5, 90)),
+    "C2": ("Device:C", "10uF", "Capacitor_SMD:C_0805_2012Metric", "C15850", {1: "+5V", 2: "GND"}, (9.0, SIZE - 3.5, 0)),  # next to the XIAO 5V pin
 }
 HOLES = [(3.5, 3.5), (SIZE - 3.5, 3.5), (3.5, SIZE - 3.5), (SIZE - 3.5, SIZE - 3.5)]
 
@@ -172,28 +173,31 @@ def write_symbol_lib(symbols):
 
 def write_footprints():
     os.makedirs(os.path.join(HERE, "cubic-earth.pretty"), exist_ok=True)
-    # BOOMELE 1.0-20P bottom contact (LCSC C2998680), from its drawing
-    # (tmp/docs/C2998680.pdf, "FPC1.0-2-nP 下接"): signal pads 0.60 x 2.2 at
-    # 1.00 pitch; hold-down pads 1.8 x 2.6, their centres 2.3 outside pins 1
-    # and 20 and about 2.26 toward the body. Origin: the back edge of the
-    # body, where the leads come out; the body (5.5 deep) and the cable
-    # opening are toward -y. Pin 1 is on the left seen from above with the
-    # opening up.
-    lines = ['(footprint "FFC_1.0mm_20P_Bottom_C2998680" (version 20240108) (generator "make.py") (layer "F.Cu")',
-             '(descr "FFC/FPC connector, 20 pins, 1.0mm pitch, bottom contact, right angle, BOOMELE 1.0-20P (LCSC C2998680)")',
+    # Ckmtw F-FPC1M20P-B310 bottom contact (LCSC C132515; drawing
+    # tmp/docs/9f407bbf01824ae3aa291f0948c5d7ca.pdf, "FPC1.0-XP 下接 抽拉式").
+    # Pads as in JLCPCB's own EasyEDA footprint for C132515
+    # (FPC-SMD_P1.00-20P_XJ-CLS): signal pads 0.6 x 2.2 at 1.00 pitch;
+    # hold-down pads 2.6 x 2.1, their centres 2.25 outside pins 1 and 20
+    # and 2.25 toward the body from the signal pads' centres; body 27.5 x
+    # 5.4. Origin: the back edge of the body, where the leads come out;
+    # the body and the cable opening are toward -y. Pin 1 is on the left
+    # seen from above with the opening up.
+    name = "FFC_1.0mm_20P_Bottom_C132515"
+    lines = [f'(footprint "{name}" (version 20240108) (generator "make.py") (layer "F.Cu")',
+             '(descr "FFC/FPC connector, 20 pins, 1.0mm pitch, bottom contact, right angle, Ckmtw F-FPC1M20P-B310 (LCSC C132515)")',
              '(attr smd)',
              '(property "Reference" "REF**" (at 0 -6.6 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))',
              '(property "Value" "FFC_20P" (at 0 -3 0) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))))',
-             '(fp_rect (start -12.5 -5.5) (end 12.5 0) (stroke (width 0.1) (type default)) (fill none) (layer "F.Fab"))',
-             '(fp_rect (start -13.1 -5.8) (end 13.1 2.4) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd"))',
-             '(fp_line (start -10.6 2.2) (end -10.6 1.2) (stroke (width 0.15) (type default)) (layer "F.SilkS"))',
-             '(fp_text user "1" (at -10.9 3.1 0) (layer "F.SilkS") (effects (font (size 0.8 0.8) (thickness 0.12))))']
+             '(fp_rect (start -13.75 -5.4) (end 13.75 0) (stroke (width 0.1) (type default)) (fill none) (layer "F.Fab"))',
+             '(fp_rect (start -14.0 -5.65) (end 14.0 2.2) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd"))',
+             '(fp_line (start -10.4 2.0) (end -10.4 1.0) (stroke (width 0.15) (type default)) (layer "F.SilkS"))',
+             '(fp_text user "1" (at -10.9 2.9 0) (layer "F.SilkS") (effects (font (size 0.8 0.8) (thickness 0.12))))']
     for p in range(1, 21):
-        lines.append(f'(pad "{p}" smd roundrect (at {-9.5 + (p - 1):.2f} 0.9) (size 0.6 2.2) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.15))')
-    for x in (-11.8, 11.8):
-        lines.append(f'(pad "" smd rect (at {x:.2f} -1.36) (size 1.8 2.6) (layers "F.Cu" "F.Paste" "F.Mask"))')
+        lines.append(f'(pad "{p}" smd rect (at {-9.5 + (p - 1):.2f} 0.826) (size 0.6 2.2) (layers "F.Cu" "F.Paste" "F.Mask"))')
+    for x in (-11.75, 11.75):
+        lines.append(f'(pad "" smd rect (at {x:.2f} -1.426) (size 2.6 2.1) (layers "F.Cu" "F.Paste" "F.Mask"))')
     lines.append(")")
-    with open(os.path.join(HERE, "cubic-earth.pretty", "FFC_1.0mm_20P_Bottom_C2998680.kicad_mod"), "w") as f:
+    with open(os.path.join(HERE, "cubic-earth.pretty", f"{name}.kicad_mod"), "w") as f:
         f.write("\n".join(lines) + "\n")
 
     # XIAO ESP32-S3 on two 1x7 female sockets, rows 15.24 apart (Seeed's
@@ -377,6 +381,17 @@ def write_board(libs):
         board.Add(zone)
 
     board.Save(os.path.join(HERE, f"{NAME}.kicad_pcb"))
+    # route.py starts every attempt from this unrouted copy: pcbnew crashes
+    # removing the tracks of a routed board.
+    os.makedirs(os.path.join(HERE, "build"), exist_ok=True)
+    board.Save(os.path.join(HERE, "build", f"{NAME}-unrouted.kicad_pcb"))
+
+
+def copy_project_for_unrouted():
+    """The unrouted copy needs the project's net classes beside it, or
+    pcbnew loads it with the defaults and route.py saves those back."""
+    import shutil
+    shutil.copy(os.path.join(HERE, f"{NAME}.kicad_pro"), os.path.join(HERE, "build", f"{NAME}-unrouted.kicad_pro"))
 
 
 def write_project():
@@ -413,6 +428,8 @@ def main():
     write_symbol_lib(symbols)
     write_footprints()
     write_project()
+    os.makedirs(os.path.join(HERE, "build"), exist_ok=True)
+    copy_project_for_unrouted()
     write_schematic(libs)
     write_board(libs)
     print(f"wrote {NAME}.kicad_sch, {NAME}.kicad_pcb (unrouted)")

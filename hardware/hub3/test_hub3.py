@@ -86,4 +86,5 @@ def test_power_tracks_are_wide(pads):
             assert width >= 0.45 - 1e-6, (t.GetNetname(), width)
             if width < 0.6 - 1e-6:
                 narrow[t.GetNetname()] += pcbnew.ToMM(t.GetLength())
-    assert narrow["+5V"] <= 5.0 and narrow["+3V3"] <= 5.0, narrow
+    # about 2.5mm per FFC connector (route.py's NARROW_POWER_MM)
+    assert narrow["+5V"] + narrow["+3V3"] <= 7.5, narrow

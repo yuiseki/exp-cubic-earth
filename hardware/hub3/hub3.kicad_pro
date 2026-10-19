@@ -332,8 +332,8 @@
     "legacy_lib_list": [],
     "top_level_sheets": [
       {
-        "filename": "hub3.kicad_sch",
-        "name": "hub3",
+        "filename": "hub3-unrouted.kicad_sch",
+        "name": "hub3-unrouted",
         "uuid": "00000000-0000-0000-0000-000000000000"
       }
     ]
