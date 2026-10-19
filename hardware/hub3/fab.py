@@ -49,13 +49,19 @@ def main():
             footprint = fp.GetFPID().GetLibItemName().wx_str()
             rotation = (fp.GetOrientationDegrees() + JLC_ROTATION_OFFSET.get(footprint, 0)) % 360
             w.writerow([fp.GetReference(), f"{x:.3f}mm", f"{y:.3f}mm", "Top", f"{rotation:.0f}"])
-            key = (fp.GetValue(), footprint, lcsc)
-            rows.setdefault(key, []).append(fp.GetReference())
+            # One row per LCSC part. JLCPCB merges rows with the same part
+            # number itself and then repeats the designators (J1-J3 given
+            # as three rows came back as nine), so never split a part.
+            row = rows.setdefault(lcsc, {"values": set(), "footprint": footprint, "refs": []})
+            row["values"].add(fp.GetValue())
+            row["refs"].append(fp.GetReference())
     with open(os.path.join(OUT, "hub3-bom.csv"), "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["Comment", "Designator", "Footprint", "LCSC Part #"])
-        for (value, footprint, lcsc), refs in sorted(rows.items(), key=lambda kv: kv[1][0]):
-            w.writerow([value, ",".join(refs), footprint, lcsc])
+        for lcsc, row in sorted(rows.items(), key=lambda kv: kv[1]["refs"][0]):
+            values = sorted(row["values"])
+            comment = values[0] if len(values) == 1 else f"{row['footprint']} ({', '.join(values)})"
+            w.writerow([comment, ",".join(row["refs"]), row["footprint"], lcsc])
     for name in sorted(os.listdir(OUT)):
         print(os.path.join(OUT, name))
 
