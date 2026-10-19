@@ -60,7 +60,7 @@ def main():
         w.writerow(["Comment", "Designator", "Footprint", "LCSC Part #"])
         for lcsc, row in sorted(rows.items(), key=lambda kv: kv[1]["refs"][0]):
             values = sorted(row["values"])
-            comment = values[0] if len(values) == 1 else f"{row['footprint']} ({', '.join(values)})"
+            comment = values[0] if len(values) == 1 else row["footprint"]  # no commas in a CSV cell
             w.writerow([comment, ",".join(row["refs"]), row["footprint"], lcsc])
     for name in sorted(os.listdir(OUT)):
         print(os.path.join(OUT, name))
