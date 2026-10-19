@@ -24,7 +24,7 @@ XIAO ESP32-S3 (ピンソケットで挿す)、74HC138、20 ピン 1.0mm の FFC 
 - Freerouting は Linux 向けの実行環境同梱版 (`freerouting-2.4.1-linux-x64.zip`) を `~/.local/share/freerouting/2.4.1/` に置いて使う。jar 単体は Java 25 が要る
 - 配線するときは GND のベタを外し、GND も線で引いてからベタを戻す。ベタを残したまま渡すと、Freerouting は GND を引かず、表のベタが島に分かれる
 - Freerouting は、`make.py` で作るたびに違う配線を返し、ときどき島や未接続を残したり、電源の線を FFC のパッドの手前で長く細らせたりする。`route.py` は、KiCad の DRC が 0 件で、+5V と +3V3 の 0.6 mm 未満の区間が合わせて 7.5 mm (FFC コネクタ 1 個あたり約 2.5 mm) 以下になるまで、最大 8 回やり直す。Freerouting は同じ DSN なら設定や網の順を変えても同じ結果を返すが、`make.py` が作るたびに部品の内部 ID が変わって DSN も変わるので、やり直すときは `make.py` から作り直す。1 回ごとに別のプロセスで動かす (pcbnew の SWIG は、同じプロセスで基板を読み直して編集すると落ちる)
-- 部品配置 (CPL) とガーバーの原点は基板の左下の角。BOM と CPL は LCSC の番号がある部品だけ (U1、C1、C2、J1〜J3)。XIAO のピンソケット 2 個は手ではんだ付けする
+- 部品配置 (CPL) とガーバーの原点は基板の左下の角。SOIC-16 は JLCPCB の 0 度が KiCad と 90 度ずれるので、CPL では 90 度引いている (`fab.py` の `JLC_ROTATION_OFFSET`、JLCPCB の確認画面で見つけた)。BOM と CPL は LCSC の番号がある部品だけ (U1、C1、C2、J1〜J3)。XIAO のピンソケット 2 個は手ではんだ付けする
 
 ## 発注の前に確かめること
 

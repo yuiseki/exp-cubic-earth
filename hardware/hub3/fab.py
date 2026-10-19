@@ -18,6 +18,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "build", "fab")
 PCB = os.path.join(HERE, "hub3.kicad_pcb")
 LAYERS = "F.Cu,B.Cu,F.Paste,B.Paste,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts"
+# JLCPCB's zero rotation differs from KiCad's for some footprints. Seen in
+# JLCPCB's placement preview (2026-10-19): the SOIC-16 at KiCad's 90 showed
+# up standing on end, pin 1 at the lower right; at 0 it lies like the pads,
+# pin 1 at the lower left.
+JLC_ROTATION_OFFSET = {"SOIC-16_3.9x9.9mm_P1.27mm": -90}
 
 
 def main():
@@ -41,8 +46,10 @@ def main():
             pos = fp.GetPosition()
             x = pcbnew.ToMM(pos.x - origin.x)
             y = -pcbnew.ToMM(pos.y - origin.y)  # JLCPCB: y up
-            w.writerow([fp.GetReference(), f"{x:.3f}mm", f"{y:.3f}mm", "Top", f"{fp.GetOrientationDegrees() % 360:.0f}"])
-            key = (fp.GetValue(), fp.GetFPID().GetLibItemName().wx_str(), lcsc)
+            footprint = fp.GetFPID().GetLibItemName().wx_str()
+            rotation = (fp.GetOrientationDegrees() + JLC_ROTATION_OFFSET.get(footprint, 0)) % 360
+            w.writerow([fp.GetReference(), f"{x:.3f}mm", f"{y:.3f}mm", "Top", f"{rotation:.0f}"])
+            key = (fp.GetValue(), footprint, lcsc)
             rows.setdefault(key, []).append(fp.GetReference())
     with open(os.path.join(OUT, "hub3-bom.csv"), "w", newline="") as f:
         w = csv.writer(f)
