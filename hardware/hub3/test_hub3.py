@@ -75,10 +75,15 @@ def test_no_other_connections(pads):
 
 
 def test_power_tracks_are_wide(pads):
-    """+5V carries all three boards' backlights; GND also has both copper pours,
-    so the router may neck it down at the 1.0mm-pitch FFC pads."""
+    """+5V carries all three boards' backlights. The router may neck power
+    tracks down where they enter the 1.0mm-pitch FFC pads; keep that short
+    (GND also has both copper pours, so only its width is checked)."""
     _, board = pads
-    least = {"+5V": 0.6, "+3V3": 0.6, "GND": 0.45}
+    narrow = {"+5V": 0.0, "+3V3": 0.0, "GND": 0.0}
     for t in board.GetTracks():
-        if t.Type() == pcbnew.PCB_TRACE_T and t.GetNetname() in least:
-            assert pcbnew.ToMM(t.GetWidth()) >= least[t.GetNetname()] - 1e-6, (t.GetNetname(), pcbnew.ToMM(t.GetWidth()))
+        if t.Type() == pcbnew.PCB_TRACE_T and t.GetNetname() in narrow:
+            width = pcbnew.ToMM(t.GetWidth())
+            assert width >= 0.45 - 1e-6, (t.GetNetname(), width)
+            if width < 0.6 - 1e-6:
+                narrow[t.GetNetname()] += pcbnew.ToMM(t.GetLength())
+    assert narrow["+5V"] <= 5.0 and narrow["+3V3"] <= 5.0, narrow

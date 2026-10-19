@@ -297,6 +297,9 @@ def write_board(libs):
     ds.m_ViasMinSize = mm(0.6)
     ds.m_MinThroughDrill = mm(0.3)
     ds.m_CopperEdgeClearance = mm(0.3)
+    # fabrication files are written from the board's lower left corner
+    ds.SetAuxOrigin(pt(0, SIZE))
+    ds.SetGridOrigin(pt(0, SIZE))
     nets = {}
 
     def net(name):
@@ -370,7 +373,7 @@ def write_board(libs):
             outline.Append(p.x, p.y)
         zone.SetLocalClearance(mm(0.3))
         zone.SetMinThickness(mm(0.2))
-        zone.SetPadConnection(pcbnew.ZONE_CONNECTION_THERMAL)
+        zone.SetPadConnection(pcbnew.ZONE_CONNECTION_FULL)
         board.Add(zone)
 
     board.Save(os.path.join(HERE, f"{NAME}.kicad_pcb"))
