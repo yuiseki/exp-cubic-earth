@@ -66,13 +66,23 @@ def ffc(board):
 # ref: (symbol, value, footprint, LCSC part, pin -> net, (x, y, rotation) on the board relative to its top left corner)
 C = SIZE / 2
 FFC_FP = "cubic-earth:FFC_1.0mm_20P_Bottom_C132515"
+SOCKET_FP = "Connector_PinSocket_2.54mm:PinSocket_1x07_P2.54mm_Vertical"
+XIAO_Y = SIZE - 10.6  # XIAO centre: its board edge on ours, the USB-C past it
 FFC_DEPTH = 5.4  # the connector body; its cable opening is flush with the board edge
 PARTS = {
     "J1": ("cubic-earth:FFC_20P", "LCD0", FFC_FP, "C132515", ffc(0), (FFC_DEPTH, C, 90)),
     "J2": ("cubic-earth:FFC_20P", "LCD1", FFC_FP, "C132515", ffc(1), (C, FFC_DEPTH, 0)),
     "J3": ("cubic-earth:FFC_20P", "LCD2", FFC_FP, "C132515", ffc(2), (SIZE - FFC_DEPTH, C, -90)),
     "U1": ("74xx:74HC138", "74HC138", "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm", "C2674688", HC138, (C, 14.0, 90)),
-    "U2": ("cubic-earth:XIAO_ESP32S3", "XIAO ESP32S3", "cubic-earth:XIAO_Socket_2x7_P2.54mm", "", XIAO, (C, SIZE - 10.6, 0)),
+    # The XIAO itself is plugged in by hand: on the schematic only. Its two
+    # female sockets are assembled. With the USB-C down, J4 is the right row
+    # (XIAO pins 1-7, D0 at the bottom) and J5 the left row (pins 8-14, 5V
+    # at the bottom); the rows are 15.24 apart (Seeed's XIAO-ESP32-S3-DIP).
+    "U2": ("cubic-earth:XIAO_ESP32S3", "XIAO ESP32S3", "", "", XIAO, None),
+    "J4": ("cubic-earth:Socket_1x07", "XIAO D0-D6", SOCKET_FP, "C2832270", {k: XIAO[k] for k in range(1, 8)},
+           (C + 7.62, XIAO_Y + 7.62, 180)),
+    "J5": ("cubic-earth:Socket_1x07", "XIAO D7-5V", SOCKET_FP, "C2832270", {k: XIAO[k + 7] for k in range(1, 8)},
+           (C - 7.62, XIAO_Y - 7.62, 0)),
     "C1": ("Device:C", "100nF", "Capacitor_SMD:C_0603_1608Metric", "C14663", {1: "+3V3", 2: "GND"}, (C + 7.5, 14.0, 90)),
     "C2": ("Device:C", "10uF", "Capacitor_SMD:C_0805_2012Metric", "C15850", {1: "+5V", 2: "GND"}, (9.0, SIZE - 3.5, 0)),  # next to the XIAO 5V pin
 }
@@ -159,6 +169,7 @@ def project_symbols():
     return {
         "XIAO_ESP32S3": box_symbol("XIAO_ESP32S3", "U", xiao_left, xiao_right),
         "FFC_20P": box_symbol("FFC_20P", "J", ffc_left, [], width=5.08),
+        "Socket_1x07": box_symbol("Socket_1x07", "J", [(str(i), f"{i}", "passive") for i in range(1, 8)], [], width=5.08),
     }
 
 
@@ -200,31 +211,22 @@ def write_footprints():
     with open(os.path.join(HERE, "cubic-earth.pretty", f"{name}.kicad_mod"), "w") as f:
         f.write("\n".join(lines) + "\n")
 
-    # XIAO ESP32-S3 on two 1x7 female sockets, rows 15.24 apart (Seeed's
-    # XIAO-ESP32-S3-DIP pad positions), USB-C toward +y. Pin 1 (D0) and pin 14
-    # (5V) are at the USB end.
-    lines = ['(footprint "XIAO_Socket_2x7_P2.54mm" (version 20240108) (generator "make.py") (layer "F.Cu")',
-             '(descr "Seeed XIAO (ESP32-S3) in two 1x7 2.54mm female pin sockets, USB-C toward +y")',
-             '(attr through_hole)',
-             '(property "Reference" "REF**" (at 0 -12 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))',
+    # Where the XIAO ESP32-S3 sits on its sockets (J4, J5): its outline and
+    # USB-C on F.Fab, which row is D0 and which 5V on the silkscreen. No pads;
+    # placed as a board-only footprint over the sockets. USB-C toward +y.
+    lines = ['(footprint "XIAO_ESP32S3_Outline" (version 20240108) (generator "make.py") (layer "F.Cu")',
+             '(descr "Outline of a Seeed XIAO ESP32-S3 on two 1x7 sockets 15.24 apart, USB-C toward +y")',
+             '(attr board_only exclude_from_pos_files exclude_from_bom)',
+             '(property "Reference" "REF**" (at 0 -12 0) (layer "F.Fab") (hide yes) (effects (font (size 1 1) (thickness 0.15))))',
              '(property "Value" "XIAO" (at 0 0 0) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))))',
              '(fp_rect (start -8.95 -10.47) (end 8.95 10.6) (stroke (width 0.1) (type default)) (fill none) (layer "F.Fab"))',
              '(fp_rect (start -4.5 10.6) (end 4.5 12.1) (stroke (width 0.1) (type default)) (fill none) (layer "F.Fab"))',
+             '(fp_text user "XIAO" (at 0 -3 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))',
              '(fp_text user "USB" (at 0 8.5 0) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))))',
-             '(fp_rect (start -9.2 -10.7) (end 9.2 12.3) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd"))']
-    for x in (-7.62, 7.62):
-        lines.append(f'(fp_rect (start {x - 1.33:.2f} -10.29) (end {x + 1.33:.2f} 10.29) (stroke (width 0.15) (type default)) (fill none) (layer "F.SilkS"))')
-    for p in range(1, 15):
-        if p <= 7:
-            x, y = 7.62, 7.62 - (p - 1) * 2.54
-        else:
-            x, y = -7.62, -7.62 + (p - 8) * 2.54
-        shape = "rect" if p == 1 else "circle"
-        lines.append(f'(pad "{p}" thru_hole {shape} (at {x:.2f} {y:.2f}) (size 1.7 1.7) (drill 1.0) (layers "*.Cu" "*.Mask"))')
-    lines.append('(fp_text user "D0" (at 10.2 7.62 90) (layer "F.SilkS") (effects (font (size 0.8 0.8) (thickness 0.12))))')
-    lines.append('(fp_text user "5V" (at -10.2 7.62 90) (layer "F.SilkS") (effects (font (size 0.8 0.8) (thickness 0.12))))')
-    lines.append(")")
-    with open(os.path.join(HERE, "cubic-earth.pretty", "XIAO_Socket_2x7_P2.54mm.kicad_mod"), "w") as f:
+             '(fp_text user "D0" (at 10.2 7.62 90) (layer "F.SilkS") (effects (font (size 0.8 0.8) (thickness 0.12))))',
+             '(fp_text user "5V" (at -10.2 7.62 90) (layer "F.SilkS") (effects (font (size 0.8 0.8) (thickness 0.12))))',
+             ")"]
+    with open(os.path.join(HERE, "cubic-earth.pretty", "XIAO_ESP32S3_Outline.kicad_mod"), "w") as f:
         f.write("\n".join(lines) + "\n")
 
 
@@ -232,7 +234,8 @@ def write_footprints():
 
 # on the 2.54mm grid so every pin lands on the connection grid
 SCH_POS = {ref: (round(x / 2.54) * 2.54, round(y / 2.54) * 2.54) for ref, (x, y) in
-           {"U2": (60, 70), "U1": (130, 70), "C1": (160, 60), "C2": (160, 85), "J1": (40, 140), "J2": (100, 140), "J3": (160, 140)}.items()}
+           {"U2": (60, 70), "U1": (130, 70), "C1": (160, 60), "C2": (160, 85), "J1": (40, 140), "J2": (100, 140), "J3": (160, 140),
+            "J4": (30, 70), "J5": (95, 70)}.items()}
 
 
 def all_libs(symbols):
@@ -256,7 +259,7 @@ def write_schematic(libs):
         props = [("Reference", ref, 0, -1), ("Value", value, 0, 1), ("Footprint", fp, 0, 0), ("Datasheet", "", 0, 0)]
         if lcsc:
             props.append(("LCSC", lcsc, 0, 0))
-        out.append(f'(symbol (lib_id "{lib_id}") (at {x:.2f} {y:.2f} 0) (unit 1) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (uuid "{uid()}")')
+        out.append(f'(symbol (lib_id "{lib_id}") (at {x:.2f} {y:.2f} 0) (unit 1) (exclude_from_sim no) (in_bom {"yes" if fp else "no"}) (on_board {"yes" if fp else "no"}) (dnp no) (uuid "{uid()}")')
         top = min(-py for _, py in pins.values()) + y
         bottom = max(-py for _, py in pins.values()) + y
         for k, (pname, pval, _, where) in enumerate(props):
@@ -313,7 +316,10 @@ def write_board(libs):
             nets[name] = n
         return nets[name]
 
-    for ref, (_, value, fp_id, lcsc, pin_nets, (x, y, rot)) in PARTS.items():
+    for ref, (_, value, fp_id, lcsc, pin_nets, place) in PARTS.items():
+        if not fp_id:
+            continue
+        x, y, rot = place
         lib, name = fp_id.split(":")
         path = os.path.join(HERE, "cubic-earth.pretty") if lib == "cubic-earth" else f"{KICAD}/footprints/{lib}.pretty"
         fp = pcbnew.FootprintLoad(path, name)
@@ -325,6 +331,8 @@ def write_board(libs):
             field = fp.GetField("LCSC")
             field.SetVisible(False)
             field.SetLayer(pcbnew.F_Fab)
+        if fp_id == SOCKET_FP:
+            fp.Reference().SetVisible(False)  # J4's would sit on the board edge; the XIAO outline labels the rows
         names = pin_names(libs[PARTS[ref][0]])
         board.Add(fp)
         fp.SetPosition(pt(x, y))
@@ -334,6 +342,12 @@ def write_board(libs):
             if num:
                 # the schematic names an unconnected pin's net after the pin
                 pad.SetNet(net(pin_nets.get(int(num)) or unconnected_net(ref, num, names.get(num))))
+    fp = pcbnew.FootprintLoad(os.path.join(HERE, "cubic-earth.pretty"), "XIAO_ESP32S3_Outline")
+    fp.SetFPID(pcbnew.LIB_ID("cubic-earth", "XIAO_ESP32S3_Outline"))
+    fp.SetReference("X1")
+    fp.Reference().SetVisible(False)
+    board.Add(fp)
+    fp.SetPosition(pt(C, XIAO_Y))
     for i, (x, y) in enumerate(HOLES, 1):
         fp = pcbnew.FootprintLoad(f"{KICAD}/footprints/MountingHole.pretty", "MountingHole_2.2mm_M2")
         fp.SetFPID(pcbnew.LIB_ID("MountingHole", "MountingHole_2.2mm_M2"))
@@ -417,7 +431,7 @@ def write_project():
     with open(os.path.join(HERE, "fp-lib-table"), "w") as f:
         f.write('(fp_lib_table (version 7)\n'
                 '  (lib (name "cubic-earth") (type "KiCad") (uri "${KIPRJMOD}/cubic-earth.pretty") (options "") (descr ""))\n')
-        for lib in ("Package_SO", "Capacitor_SMD", "MountingHole"):
+        for lib in ("Package_SO", "Capacitor_SMD", "MountingHole", "Connector_PinSocket_2.54mm"):
             f.write(f'  (lib (name "{lib}") (type "KiCad") (uri "${{KICAD10_FOOTPRINT_DIR}}/{lib}.pretty") (options "") (descr ""))\n')
         f.write(")\n")
 

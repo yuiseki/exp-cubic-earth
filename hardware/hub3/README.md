@@ -1,9 +1,9 @@
 # hub3
 
-XIAO ESP32-S3 (ピンソケットで挿す)、74HC138、20 ピン 1.0mm の FFC コネクタ 3 個を載せた 44 x 44 mm の 2 層基板。ER-PCBA5981-1 を 3 枚つなぎ、`lt7680_multi` の構成 3 (`-DNUM_BOARDS=3`) と同じ配線にする (`WIRING.md`)。
+XIAO ESP32-S3 (1x7 のピンソケット 2 個に挿す)、74HC138、20 ピン 1.0mm の FFC コネクタ 3 個を載せた 44 x 44 mm の 2 層基板。ER-PCBA5981-1 を 3 枚つなぎ、`lt7680_multi` の構成 3 (`-DNUM_BOARDS=3`) と同じ配線にする (`WIRING.md`)。
 
 - J1 (LCD0、左の辺)、J2 (LCD1、上の辺)、J3 (LCD2、右の辺): Ckmtw F-FPC1M20P-B310 下接 (LCSC C132515)。口は基板の外を向き、基板の辺にそろう。3 個は基板の中心のまわりに 90 度ずつ回した同じ置き方
-- U2: XIAO ESP32-S3。USB-C は下の辺 (FFC の無い辺) に向く
+- J4、J5: XIAO 用の 1x7、2.54 mm のメスのピンソケット (XFCN PM254V-11-07-H85、LCSC C2832270、高さ 8.5 mm)。USB-C を下の辺 (FFC の無い辺) に向けて挿すと、右の列 J4 が XIAO の 1〜7 番 (D0〜D6、D0 が下)、左の列 J5 が 8〜14 番 (D7〜5V、5V が下)。XIAO 本体 (回路図の U2) は基板に載らず、手で挿す
 - U1: 74HC138 (SOIC-16、LCSC C2674688)。A, B, C = D0, D2, D6。基板 b の LCM_SCS は Yb、LCD_CS は Y(3+b)、Y6 と Y7 は空き
 - C1 100nF (74HC138 の 3.3V)、C2 10uF (XIAO の 5V ピンのそば)
 - 角に M2 の穴 4 個
@@ -24,7 +24,7 @@ XIAO ESP32-S3 (ピンソケットで挿す)、74HC138、20 ピン 1.0mm の FFC 
 - Freerouting は Linux 向けの実行環境同梱版 (`freerouting-2.4.1-linux-x64.zip`) を `~/.local/share/freerouting/2.4.1/` に置いて使う。jar 単体は Java 25 が要る
 - 配線するときは GND のベタを外し、GND も線で引いてからベタを戻す。ベタを残したまま渡すと、Freerouting は GND を引かず、表のベタが島に分かれる
 - Freerouting は、`make.py` で作るたびに違う配線を返し、ときどき島や未接続を残したり、電源の線を FFC のパッドの手前で長く細らせたりする。`route.py` は、KiCad の DRC が 0 件で、+5V と +3V3 の 0.6 mm 未満の区間が合わせて 7.5 mm (FFC コネクタ 1 個あたり約 2.5 mm) 以下になるまで、最大 8 回やり直す。Freerouting は同じ DSN なら設定や網の順を変えても同じ結果を返すが、`make.py` が作るたびに部品の内部 ID が変わって DSN も変わるので、やり直すときは `make.py` から作り直す。1 回ごとに別のプロセスで動かす (pcbnew の SWIG は、同じプロセスで基板を読み直して編集すると落ちる)
-- 部品配置 (CPL) とガーバーの原点は基板の左下の角。SOIC-16 は JLCPCB の 0 度が KiCad と 90 度ずれるので、CPL では 90 度引いている (`fab.py` の `JLC_ROTATION_OFFSET`、JLCPCB の確認画面で見つけた)。BOM と CPL は LCSC の番号がある部品だけ (U1、C1、C2、J1〜J3)。XIAO のピンソケット 2 個は手ではんだ付けする
+- 部品配置 (CPL) とガーバーの原点は基板の左下の角。SOIC-16 は JLCPCB の 0 度が KiCad と 90 度ずれるので、CPL では 90 度引いている (`fab.py` の `JLC_ROTATION_OFFSET`、JLCPCB の確認画面で見つけた)。BOM と CPL は LCSC の番号がある部品 (U1、C1、C2、J1〜J5)。J4、J5 は挿入部品 (THT) なので、JLCPCB の組み立てで挿入部品を受けてもらう
 
 ## 発注の前に確かめること
 

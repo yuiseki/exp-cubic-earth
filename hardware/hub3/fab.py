@@ -23,6 +23,9 @@ LAYERS = "F.Cu,B.Cu,F.Paste,B.Paste,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts"
 # up standing on end, pin 1 at the lower right; at 0 it lies like the pads,
 # pin 1 at the lower left.
 JLC_ROTATION_OFFSET = {"SOIC-16_3.9x9.9mm_P1.27mm": -90}
+# JLCPCB places a part by its centre. KiCad's pin sockets have their origin
+# on pin 1, so give the centre of their pads instead.
+JLC_CENTRE_FROM_PADS = {"PinSocket_1x07_P2.54mm_Vertical"}
 
 
 def main():
@@ -43,10 +46,14 @@ def main():
             lcsc = fp.GetFieldText("LCSC") if fp.HasField("LCSC") else ""
             if not lcsc:
                 continue
+            footprint = fp.GetFPID().GetLibItemName().wx_str()
             pos = fp.GetPosition()
+            if footprint in JLC_CENTRE_FROM_PADS:
+                xs = [p.GetPosition().x for p in fp.Pads()]
+                ys = [p.GetPosition().y for p in fp.Pads()]
+                pos = pcbnew.VECTOR2I((min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2)
             x = pcbnew.ToMM(pos.x - origin.x)
             y = -pcbnew.ToMM(pos.y - origin.y)  # JLCPCB: y up
-            footprint = fp.GetFPID().GetLibItemName().wx_str()
             rotation = (fp.GetOrientationDegrees() + JLC_ROTATION_OFFSET.get(footprint, 0)) % 360
             w.writerow([fp.GetReference(), f"{x:.3f}mm", f"{y:.3f}mm", "Top", f"{rotation:.0f}"])
             # One row per LCSC part. JLCPCB merges rows with the same part
