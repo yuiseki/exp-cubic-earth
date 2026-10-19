@@ -12,6 +12,7 @@ faces around the corner (+x, -y, +z). The second module is the same
 module turned half way round about the axis (1, 1, 0), which takes the
 corner to (-x, +y, -z) and top, A, B to bottom, C, D.
 """
+import itertools
 from dataclasses import dataclass
 
 import numpy as np
@@ -152,3 +153,51 @@ def minimum_edge(plan, lo=60.0, hi=140.0):
         mid = (lo + hi) / 2
         lo, hi = (lo, mid) if collisions(plan, mid) == [] else (mid, hi)
     return hi
+
+
+def ffc_destinations(plan):
+    """For each face of the first module, the face its FFC leaves toward."""
+    by_normal = {axis_name(f.normal): f.name for f in plan.faces}
+    return {f.name: by_normal[axis_name(f.ffc_direction)] for f in plan.faces if f.module == 1}
+
+
+CORNER = np.array([1.0, -1.0, 1.0]) / np.sqrt(3)  # the first module's corner
+
+
+def _turn_about(axis, angle):
+    k = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
+    return np.eye(3) + np.sin(angle) * k + (1 - np.cos(angle)) * k @ k
+
+
+def turning(plan):
+    """'counterclockwise' or 'clockwise' (seen from outside the corner) when
+    the three faces are one face turned a third of the way round the corner
+    each time, so every FFC leaves toward the next face; else None."""
+    fs = {f.name: f for f in plan.faces if f.module == 1}
+    q = _turn_about(CORNER, 2 * np.pi / 3)
+    if not all(np.allclose(q @ fs[a].rotation, fs[b].rotation) for a, b in (("top", "A"), ("A", "B"), ("B", "top"))):
+        return None
+    sense = {float(np.sign(np.cross(f.normal, f.ffc_direction) @ CORNER)) for f in fs.values()}
+    if sense == {1.0}:
+        return "counterclockwise"
+    if sense == {-1.0}:
+        return "clockwise"
+    return None
+
+
+def search():
+    """Every way to turn the first module's three panels (4 x 4 x 4)."""
+    axes = ["+x", "-x", "+y", "-y", "+z", "-z"]
+    choices = {n: [a for a in axes if abs(parse_axis(a) @ np.array(FIRST[n], float)) < 0.5] for n in FIRST}
+    rows = []
+    for combo in itertools.product(*choices.values()):
+        plan = Plan(dict(zip(FIRST, combo)))
+        dest = ffc_destinations(plan)
+        rows.append({
+            "plan": ",".join(f"{n}={a}" for n, a in zip(FIRST, combo)),
+            "dest": dest,
+            "inside": set(dest.values()) <= set(FIRST),
+            "turning": turning(plan),
+            "edge": minimum_edge(plan),
+        })
+    return rows

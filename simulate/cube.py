@@ -3,6 +3,9 @@
     uv run --no-project --with numpy --with numpy-stl python cube.py
     uv run --no-project --with numpy --with numpy-stl python cube.py --fpc top=-y,A=-z,B=-z --edge 82
 
+--search lists the 64 ways to turn the first module's three panels: where
+each FFC leaves, whether all stay in the module, and the smallest edge.
+
 --fpc gives, for the first module (top, A, B), the world direction each
 panel's FPC edge points to; the second module (bottom, C, D) is the same
 module turned half way round (geometry.py). Without --edge the cube is
@@ -101,7 +104,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fpc", default="top=-y,A=-z,B=-z")
     ap.add_argument("--edge", type=float)
+    ap.add_argument("--search", action="store_true", help="list the 64 ways to turn the first module's panels")
     args = ap.parse_args()
+    if args.search:
+        rows = sorted(g.search(), key=lambda r: (not r["inside"], r["turning"] is None, r["edge"]))
+        print("plan (FPC edge of top, A, B) | FFC of top, A, B leaves toward | FFCs stay in the module | same face round the corner | smallest edge")
+        for r in rows:
+            dest = ", ".join(r["dest"].values())
+            print(f"{r['plan']:18s} | {dest:14s} | {'yes' if r['inside'] else 'no ':3s} | {r['turning'] or '-':16s} | {r['edge']:.2f}")
+        return
     plan = g.Plan(dict(kv.split("=") for kv in args.fpc.split(",")))
     faces = plan.faces
     edge_min = g.minimum_edge(plan)

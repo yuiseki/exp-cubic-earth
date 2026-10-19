@@ -48,3 +48,18 @@ def test_minimum_edge_is_tight():
     edge = g.minimum_edge(plan)
     assert g.collisions(plan, edge) == []
     assert g.collisions(plan, edge - 0.05) != []
+
+
+def test_eight_plans_keep_every_ffc_in_its_own_module():
+    rows = g.search()
+    inside = [r for r in rows if r["inside"]]
+    assert len(rows) == 64 and len(inside) == 8
+    for r in inside:
+        assert set(r["dest"].values()) <= set(g.FIRST)
+
+
+def test_four_plans_turn_one_face_round_the_corner_and_two_keep_the_ffcs_inside():
+    rows = [r for r in g.search() if r["turning"]]
+    assert len(rows) == 4
+    inside = {r["plan"]: r["turning"] for r in rows if r["inside"]}
+    assert inside == {"top=-y,A=+x,B=+z": "clockwise", "top=-x,A=-z,B=+y": "counterclockwise"}
