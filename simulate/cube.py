@@ -22,6 +22,7 @@ import zipfile
 import numpy as np
 from stl import mesh
 
+import corner_board as cb
 import geometry as g
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -34,7 +35,19 @@ COLORS = {
     "board": "#1F5FBFFF",
     "fpc": "#E0A030FF",
     "ffc": "#E8E8E8FF",
+    "corner board": "#2E8B57FF",
 }
+
+
+def prism_triangles(p):
+    """Closed mesh of a triangular slab: p[:3] one triangle, p[3:] the other."""
+    f = [(0, 2, 1), (3, 4, 5), (0, 1, 4), (0, 4, 3), (1, 2, 5), (1, 5, 4), (2, 0, 3), (2, 3, 5)]
+    tris = p[np.array(f)]
+    centre = p.mean(0)
+    for i, t in enumerate(tris):  # point every face outward
+        if np.cross(t[1] - t[0], t[2] - t[0]) @ (t.mean(0) - centre) < 0:
+            tris[i] = t[[0, 2, 1]]
+    return tris
 
 
 def box_triangles(box):
@@ -104,6 +117,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fpc", default="top=-y,A=-z,B=-z")
     ap.add_argument("--edge", type=float)
+    ap.add_argument("--corner", help="triangular board in each corner: t,side,turn (corner_board.py)")
     ap.add_argument("--search", action="store_true", help="list the 64 ways to turn the first module's panels")
     args = ap.parse_args()
     if args.search:
@@ -129,12 +143,24 @@ def main():
     panel = mesh.Mesh.from_file(os.path.join(BUILD, "panel.stl")).vectors.astype(float)
     board = mesh.Mesh.from_file(os.path.join(BUILD, "board.stl")).vectors.astype(float)
     tag = args.fpc.replace("=", "").replace(",", "_").replace("+", "p").replace("-", "m")
+    corner = None
+    if args.corner:
+        t, side, turn = (float(x) for x in args.corner.split(","))
+        hit = cb.hits(plan, edge, t, side, turn)
+        print(f"corner board: {side:g} mm triangle, {t:g} mm in from the inner corner, turned {turn:g}; "
+              f"largest that fits there {cb.largest_side(plan, edge, t, turn):.1f} mm; overlaps: {', '.join(hit) or 'none'}")
+        corner = prism_triangles(cb.slab(edge, t, side, turn))
+        tag += f"_corner{t:g}_{side:g}_{turn:g}"
     diagonal = np.array([-1.0, 1.0, -1.0]) / np.sqrt(3)
     for exploded in (False, True):
         parts = []
         for f in faces:
             lift = diagonal * EXPLODE_MM if (exploded and f.module == 2) else np.zeros(3)
             parts += face_parts(f, edge, panel, board, lift)
+        if corner is not None:
+            parts.append(("module 1: corner board", COLORS["corner board"], corner))
+            lift = diagonal * EXPLODE_MM if exploded else np.zeros(3)
+            parts.append(("module 2: corner board", COLORS["corner board"], corner @ g.TURN.T + lift))
         write_3mf(os.path.join(BUILD, f"cube_{tag}{'_exploded' if exploded else ''}.3mf"), parts)
 
 
