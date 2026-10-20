@@ -101,6 +101,20 @@ ssh pi5-deck "~/.venv-esptool/bin/python tmp/cubic-clouds/send_faces.py $PORT tm
 - その黒い所は、SSEC RealEarth の 1 時間ごとの全球赤外合成 (`globalir`、表記「Source: SSEC RealEarth, UW-Madison」が要る) の雲を、雲の無い Blue Marble に白く重ねて埋める。RealEarth の `/api/image` は Web メルカトル (GeoTIFF で確認) で、85 度まで、透かしなしは幅 1024 画素まで (1280 で「Size limit exceeded」の透かし)。85 度より先は 85 度の輪の平均の色。極夜では凍った海も冷たく、雲と同じく白く写る
 - `#U<面>` は面の画像を 4096 バイトずつ受けて PSRAM に置き (ビルドに `PSRAM=opi` が要る)、以後その面は焼き込みの地球の代わりに使う。1 面約 2〜2.6 秒。`#u` で焼き込みに戻す
 
+## 雲のパラパラ漫画 (`host/clouds_hourly.py`、`host/send_frames.py`、`#R`、`#M`)
+
+```sh
+# 母艦: SSEC の全球赤外の直近 24 時間を、基板ごとの面と回転 (基板 0, 1, 2 の 面:回転) で切り出す
+cd lt7680_multi/host
+uv run -q --no-project --with numpy --with pillow --with pyproj python clouds_hourly.py --hours 24 --boards 3:0,4:2,0:1
+scp send_faces.py send_frames.py ~/tmp/cubic-hourly/b*.bin pi5-deck:tmp/cubic-hourly/
+# pi5-deck: 送る (3 基板 x 24 コマで約 3 分)。そのあと #M<ミリ秒> で再生、何か 1 文字で止まる
+ssh pi5-deck "cd tmp/cubic-hourly && ~/.venv-esptool/bin/python send_frames.py $PORT . 3 24"
+```
+
+- 1 時間ごとの全球の雲は GIBS の実色には無いので、SSEC RealEarth の全球赤外 (過去 30 日、1024x512) を雲の無い Blue Marble に白く重ねる。24 時間とも同じ明るさの幅で重ねるので、コマの間で明るさが揺れない
+- コマは各基板の表示用メモリのページ 8〜33 に置く (`#R<基板>,<コマ>` は受けたそばから LT7680 に流す。回転は送る側で済ませる)。再生は表示ページの切り替えだけなので、SPI をほとんど使わない
+
 ## 起動
 
 既定はメーカー推奨どおり: 電源投入から 30ms 待つ → LCM_RESET (全基板共通) → 基板ごとに LT7680 の初期化 → ST7701S の初期化 1 回 → 表示オン → 地球。1 枚で約 1 秒。画素の SPI は既定 20MHz (`-DPIXEL_SPI_HZ=...` で変更、レジスタの読み書きは 1MHz)。以前の「1.5 秒待って流れを 2 回」は `-DBOOT_LEGACY_FLOWS=1` で残してある (LCD_CS が抜けていた頃の対症療法)。

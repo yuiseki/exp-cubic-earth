@@ -492,6 +492,77 @@ void receiveFace(int f) {
   Serial.printf("U done %d\n", f);
 }
 
+// ---- パラパラ漫画 (#R で表示用メモリのページに直接受け、#M で再生) ----
+// コマ k は各基板のページ FLIP_BASE + k (#G が使う 0〜3 と、スプライトの続きを避ける)。24 コマで約 11MB、16MB に収まる。
+// 送る側 (host/clouds_hourly.py) で基板ごとの面と回転を済ませた、パネルの並びの画素を受ける
+static const int FLIP_BASE = 8, FLIP_MAX = 26;  // ページ 8〜33 (33 x 460,800 = 15.2MB)
+int flipFrames = 0;
+
+void receivePage(int b, int k) {
+  const uint32_t total = 480u * 480u * 2u, chunk = 4096;
+  if (b < 0 || b >= NUM_BOARDS || k < 0 || k >= FLIP_MAX) { Serial.println("R error: board or frame out of range"); return; }
+  static uint8_t buf[4096];
+  while (Serial.available()) Serial.read();
+  int keep = curBoard;
+  curBoard = b;
+  drawToPage(FLIP_BASE + k);
+  writeReg16(0x56, 0);
+  writeReg16(0x58, 0);
+  writeReg16(0x5A, 480);
+  writeReg16(0x5C, 480);
+  writeReg16(0x5F, 0);
+  writeReg16(0x61, 0);
+  windowFull = true;
+  xfer16(0x00, 0x04);
+  Serial.println("R ready");
+  SPISettings fast(pixelHz, MSBFIRST, SPI_MODE3);
+  uint32_t got = 0, t0 = millis();
+  while (got < total) {
+    uint32_t want = min(chunk, total - got), n = 0, last = millis();
+    while (n < want) {
+      int a = Serial.available();
+      if (a > 0) { n += Serial.readBytes(buf + n, min((uint32_t)a, want - n)); last = millis(); }
+      else if (millis() - last > 3000) { Serial.printf("R error: timeout at %lu\n", (unsigned long)(got + n)); drawToPage(0); curBoard = keep; return; }
+    }
+    for (uint32_t i = 0; i < n; i += 64) {  // 64 バイトのバーストごとに書き込み FIFO の空きを待つ
+      uint32_t w0 = millis();
+      while (readStatus() & 0x80) {
+        if (millis() - w0 > 100) { Serial.println("R error: FIFO"); drawToPage(0); curBoard = keep; return; }
+      }
+      SPI.beginTransaction(fast);
+      selectLine(SEL_LT);
+      SPI.transfer(0x80);
+      SPI.writeBytes(buf + i, min((uint32_t)64, n - i));
+      selectLine(SEL_NONE);
+      SPI.endTransaction();
+    }
+    got += n;
+    Serial.print("k");
+  }
+  drawToPage(0);
+  curBoard = keep;
+  if (k + 1 > flipFrames) flipFrames = k + 1;
+  Serial.printf("\nR done %d %d in %lu ms\n", b, k, (unsigned long)(millis() - t0));
+}
+
+// 全基板でコマ 0..frames-1 を ms ごとに切り替えて繰り返す。シリアルに何か届いたら止めて、ページ 0 に戻す
+void playFlip(int ms, int frames) {
+  if (frames <= 0 || frames > flipFrames) frames = flipFrames;
+  if (frames == 0) { Serial.println("M error: no frames (send them with #R)"); return; }
+  while (Serial.available()) Serial.read();
+  Serial.printf("M playing %d frames, %d ms each (send anything to stop)\n", frames, ms);
+  int keep = curBoard;
+  for (int k = 0; !Serial.available(); k = (k + 1) % frames) {
+    uint32_t t0 = millis();
+    for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; showPage(FLIP_BASE + k); }
+    while (millis() - t0 < (uint32_t)ms && !Serial.available()) delay(1);
+  }
+  while (Serial.available()) Serial.read();
+  for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; showPage(0); }
+  curBoard = keep;
+  Serial.println("M stopped");
+}
+
 // ---- 表示用メモリの中の複数の画面 (ダブルバッファ用) ----
 // LT7680A-R の表示用メモリは 16MB。480x480 の 16 ビット色 1 枚 (460,800 バイト) を「ページ」と呼び、
 // ページ 0 と 1 を表と裏、ページ 2 を地球の画像 (消すときのコピー元) に使う
@@ -1287,6 +1358,18 @@ void loop() {
       for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; drawToPage(0); showPage(0); drawFace(boardFace(b)); }
       curBoard = 0;
       Serial.println("cmd u: built-in faces");
+      break;
+    }
+    case 'R': {  // #R<基板>,<コマ> パラパラ漫画の 1 コマを受ける
+      long b = Serial.parseInt();
+      long k = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 0;
+      receivePage(b, k);
+      break;
+    }
+    case 'M': {  // #M<ミリ秒>[,<コマ数>] パラパラ漫画を再生する
+      long ms = Serial.parseInt();
+      long n = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 0;
+      playFlip(ms > 0 ? ms : 200, n);
       break;
     }
     case 'B': pageSelfTest(); break;  // ページの切り替えと LT7680 の中でのコピーを確かめる (選んだ基板)
