@@ -106,6 +106,7 @@ bool waitFor(const char *what, uint32_t timeoutMs, bool (*cond)()) {
     }
     delay(1);
   }
+  if (millis() - t0 > 100) Serial.printf("waited %lu ms for %s (board %d)\n", (unsigned long)(millis() - t0), what, curBoard);
   return true;
 }
 
@@ -240,6 +241,10 @@ static const int VBP = 20, VFP = 12, VPW = 3;   // LCD.h の LCD_VBPD/VFPD/VSPW
 #define SDRAM_ITV 486
 #endif
 
+#ifndef LT_RAM_READY_TIMEOUT_MS
+#define LT_RAM_READY_TIMEOUT_MS 1000
+#endif
+
 bool initLt7680NoReset() {
   if (!waitFor("normal operation", 1000, [] { return (readStatus() & 0x02) == 0; })) return false;
 
@@ -262,7 +267,7 @@ bool initLt7680NoReset() {
   writeReg(0xE2, SDRAM_ITV & 0xFF);
   writeReg(0xE3, SDRAM_ITV >> 8);
   writeReg(0xE4, 0x05);
-  if (!waitFor("display RAM ready", 1000, [] { return (readStatus() & 0x04) != 0; })) return false;
+  if (!waitFor("display RAM ready", LT_RAM_READY_TIMEOUT_MS, [] { return (readStatus() & 0x04) != 0; })) return false;
 
   // パネルの信号
   writeReg(0x10, 0x04);  // 主画面 16bpp、Sync モード (VSYNC、HSYNC、DE を全部出す)
