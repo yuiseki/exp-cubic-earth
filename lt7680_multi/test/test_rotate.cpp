@@ -27,5 +27,14 @@ int main() {
         seen[i] = true;
       }
   }
+  // panelOf is the inverse: the panel point that shows source pixel (sx, sy)
+  for (int r = 0; r < 4; r++)
+    for (uint32_t y = 0; y < m; y += 7)
+      for (uint32_t x = 0; x < m; x += 5) {
+        uint32_t i = rotatedIndex(x, y, r, m);
+        uint32_t px, py;
+        panelOf(i % m, i / m, r, &px, &py, m);
+        assert(px == x && py == y);
+      }
   std::puts("rotate ok");
 }

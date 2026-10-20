@@ -11,3 +11,13 @@ static inline uint32_t rotatedIndex(uint32_t x, uint32_t y, int r, uint32_t n = 
     default: return y * n + x;
   }
 }
+
+// rotatedIndex の逆: 元の画像の (sx, sy) を映すパネルの (x, y)
+static inline void panelOf(uint32_t sx, uint32_t sy, int r, uint32_t *x, uint32_t *y, uint32_t n = 480) {
+  switch (r & 3) {
+    case 1: *x = n - 1 - sy; *y = sx; break;
+    case 2: *x = n - 1 - sx; *y = n - 1 - sy; break;
+    case 3: *x = sy; *y = n - 1 - sx; break;
+    default: *x = sx; *y = sy; break;
+  }
+}
