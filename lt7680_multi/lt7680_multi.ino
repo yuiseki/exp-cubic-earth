@@ -18,6 +18,7 @@
 #include "mover.h"  // (構造体は .ino に書くと Arduino の自動プロトタイプより後ろになる)
 #include <Preferences.h>
 #include <SPI.h>
+#include "soc/gpio_reg.h"
 
 #ifndef NUM_BOARDS
 #define NUM_BOARDS 1
@@ -54,6 +55,10 @@ static const int PIN_ADDR[3] = {D0, D2, D6};  // 74HC138 の A0, A1, A2
 enum Sel { SEL_NONE, SEL_LT, SEL_LCD };
 int curBoard = 0;  // 今の命令の対象
 
+#ifndef BOARD_SELECT_DIRECT
+uint32_t selMask[8][2][2];  // 番地ごとに [0 にするビット / 1 にするビット][GPIO 0〜31 / 32〜]
+#endif
+
 // 74HC138 のアドレスを置く。アドレスを変える瞬間に隣の出力が ns 単位で落ちることがあるが、
 // クロックが止まっている間の CS のパルスは LT7680 も ST7701S も無視する
 void selectLine(Sel s) {
@@ -61,8 +66,13 @@ void selectLine(Sel s) {
   digitalWrite(PIN_SCS, s == SEL_LT ? LOW : HIGH);
   digitalWrite(PIN_LCD_CS, s == SEL_LCD ? LOW : HIGH);
 #else
+  // 3 本を GPIO のレジスタで書く (digitalWrite を 3 回より速い)。先に 0 にするビットを落としてから 1 を立てるので、
+  // 7 (どれも選ばない) との行き来では途中に別の番地を通らない
   int code = (s == SEL_NONE) ? 7 : (s == SEL_LT ? curBoard : 3 + curBoard);
-  for (int i = 0; i < 3; i++) digitalWrite(PIN_ADDR[i], (code >> i) & 1);
+  REG_WRITE(GPIO_OUT_W1TC_REG, selMask[code][0][0]);
+  REG_WRITE(GPIO_OUT1_W1TC_REG, selMask[code][0][1]);
+  REG_WRITE(GPIO_OUT_W1TS_REG, selMask[code][1][0]);
+  REG_WRITE(GPIO_OUT1_W1TS_REG, selMask[code][1][1]);
 #endif
 }
 
@@ -72,6 +82,11 @@ void selectSetup() {
   pinMode(PIN_LCD_CS, OUTPUT);
 #else
   for (int i = 0; i < 3; i++) pinMode(PIN_ADDR[i], OUTPUT);
+  for (int code = 0; code < 8; code++)
+    for (int i = 0; i < 3; i++) {
+      int pin = PIN_ADDR[i], bit = (code >> i) & 1;
+      selMask[code][bit][pin >= 32] |= 1u << (pin & 31);
+    }
 #endif
   selectLine(SEL_NONE);
 }
@@ -80,13 +95,15 @@ uint32_t regHz = 1000000;  // レジスタの読み書きの速さ。#L<kHz> で
 
 // ---- LT7680 (4 線 SPI、1 回 16 クロック、先頭 8 ビットが前置き) ----
 
+// SPI を握ったままにしている間 (RegBurst) は、1 回ごとに取り直さない
+bool regHeld = false;
+
 uint8_t xfer16(uint8_t prefix, uint8_t data) {
-  SPI.beginTransaction(SPISettings(regHz, MSBFIRST, SPI_MODE3));
+  if (!regHeld) SPI.beginTransaction(SPISettings(regHz, MSBFIRST, SPI_MODE3));
   selectLine(SEL_LT);
-  SPI.transfer(prefix);
-  uint8_t r = SPI.transfer(data);
+  uint8_t r = SPI.transfer16(((uint16_t)prefix << 8) | data) & 0xFF;
   selectLine(SEL_NONE);
-  SPI.endTransaction();
+  if (!regHeld) SPI.endTransaction();
   return r;
 }
 
@@ -518,6 +535,12 @@ void pageSelfTest() {
   drawToPage(0);
 }
 
+// レジスタだけを続けて読み書きする間、SPI を hz で握ったままにする (画素のバーストを挟む所では使わない)
+struct RegBurst {
+  RegBurst(uint32_t hz) { SPI.beginTransaction(SPISettings(hz, MSBFIRST, SPI_MODE3)); regHeld = true; }
+  ~RegBurst() { regHeld = false; SPI.endTransaction(); }
+};
+
 // ---- #G: ダブルバッファで飛行機と船を動かす ----
 // ページ 0 と 1 を表と裏、ページ 2 を地球の画像にし、ページ 3 から先にスプライト (印とラベルの絵) を並べる。
 // 毎コマ、裏のページで「2 コマ前に描いた四角を地球の画像から写して消す」→「新しい場所へスプライトを透明色付きで写す」をして、
@@ -618,7 +641,7 @@ template <typename F> void streamPixels(int x0, int y0, int w, int h, F px) {
   }
 }
 
-void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync) {
+void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32_t burstHz) {
   const int PLANES = planesPerBoard * NUM_BOARDS, SHIPS = 4 * NUM_BOARDS, N = PLANES + SHIPS;
   GMover *m = (GMover *)calloc(N, sizeof(GMover));
   if (!m) { Serial.println("cmd G: out of memory"); return; }
@@ -675,6 +698,7 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync) {
   while (millis() - t0 < (uint32_t)seconds * 1000) {
     uint32_t f0 = micros();
     int back = 1 - front;
+    RegBurst burst(burstHz);  // このコマはレジスタと BTE だけなので、SPI を握ったまま速く回す
     for (int i = 0; i < N; i++) {  // 進める
       GMover &o = m[i];
       float c = cosf(o.speed), s = sinf(o.speed), np[3], nd[3];
@@ -693,33 +717,38 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync) {
       memcpy(o.p, np, sizeof(np));
       memcpy(o.d, nd, sizeof(nd));
     }
-    if (vsync && frames > 0)  // 前のコマの切り替えが効いて、裏のページがもう映っていないことを確かめる
-      for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; vsyncWait(); }
-    for (int i = 0; i < N; i++) {  // 裏のページで、2 コマ前の四角を消す
+    for (int i = 0; i < N; i++) {  // 描く基板と場所、ラベルの向きを先に決める
       GMover &o = m[i];
-      if (o.rb[back] < 0) continue;
-      curBoard = o.rb[back];
-      bteBlit(2, o.rx[back], o.ry[back], back, o.rx[back], o.ry[back], o.rw[back], o.rh[back], false);
-      o.rb[back] = -1;
+      locate(o.p, o.size, &o.nb, &o.cx, &o.cy, &o.f, &o.fx, &o.fy);
+      o.q = (o.nb >= 0 && labels) ? southOnPanel(o.p, o.nb) : 0;
     }
-    for (int i = 0; i < N; i++) {  // 裏のページに描く
-      GMover &o = m[i];
-      int b, cx, cy, f, fx, fy;
-      locate(o.p, o.size, &b, &cx, &cy, &f, &fx, &fy);
-      if (b < 0) continue;
-      int q = labels ? southOnPanel(o.p, b) : 0;
-      SpriteGeom g = spriteGeom(o, q);
-      int k = i, sx = (k % BLOCKS_PER_ROW) * BLOCK_W + g.ox, sy = (k / BLOCKS_PER_ROW) * BLOCK_H + g.oy;
-      int dx = cx - o.size / 2 - g.mx, dy = cy - o.size / 2 - g.my;
+    // 基板ごとに「前の切り替えが効くのを待つ → 2 コマ前の四角を消す → 描く → 切り替える」。
+    // 基板 0 を待つ間に基板 1、2 の切り替えも効いていくので、待ち時間が重ならない
+    for (int b = 0; b < NUM_BOARDS; b++) {
       curBoard = b;
-      bteBlit(SHEET_PAGE, sx, sy, back, dx, dy, g.w, g.h, true);
-      o.rx[back] = max(dx, 0);
-      o.ry[back] = max(dy, 0);
-      o.rw[back] = min(dx + g.w, 480) - o.rx[back];
-      o.rh[back] = min(dy + g.h, 480) - o.ry[back];
-      o.rb[back] = (o.rw[back] > 0 && o.rh[back] > 0) ? b : -1;
+      if (vsync && frames > 0) vsyncWait();
+      for (int i = 0; i < N; i++) {
+        GMover &o = m[i];
+        if (o.rb[back] != b) continue;
+        bteBlit(2, o.rx[back], o.ry[back], back, o.rx[back], o.ry[back], o.rw[back], o.rh[back], false);
+        o.rb[back] = -1;
+      }
+      for (int i = 0; i < N; i++) {
+        GMover &o = m[i];
+        if (o.nb != b) continue;
+        SpriteGeom g = spriteGeom(o, o.q);
+        int sx = (i % BLOCKS_PER_ROW) * BLOCK_W + g.ox, sy = (i / BLOCKS_PER_ROW) * BLOCK_H + g.oy;
+        int dx = o.cx - o.size / 2 - g.mx, dy = o.cy - o.size / 2 - g.my;
+        bteBlit(SHEET_PAGE, sx, sy, back, dx, dy, g.w, g.h, true);
+        o.rx[back] = max(dx, 0);
+        o.ry[back] = max(dy, 0);
+        o.rw[back] = min(dx + g.w, 480) - o.rx[back];
+        o.rh[back] = min(dy + g.h, 480) - o.ry[back];
+        o.rb[back] = (o.rw[back] > 0 && o.rh[back] > 0) ? b : -1;
+      }
+      showPage(back);
+      if (vsync) vsyncArm();
     }
-    for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; showPage(back); if (vsync) vsyncArm(); }
     front = back;
     frames++;
     uint32_t spent = micros() - f0;
@@ -1198,12 +1227,13 @@ void loop() {
       demoMovers(sec > 0 ? sec : 30, labels, constrain(planes, 0, 200));
       break;
     }
-    case 'G': {  // #G<秒>[,<ラベル 0/1>[,<基板あたりの飛行機>[,<垂直同期を待つ 0/1、既定 1>]]] #D のダブルバッファ版
+    case 'G': {  // #G<秒>[,<ラベル 0/1>[,<基板あたりの飛行機>[,<切り替えを待つ 0/1、既定 1>[,<コマの間のレジスタ MHz、既定 10>]]]] #D のダブルバッファ版
       long sec = Serial.parseInt();
       bool labels = Serial.peek() == ',' && (Serial.read(), Serial.parseInt() == 1);
       long planes = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 5;
       bool vsync = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt() != 0) : true;
-      demoDouble(sec > 0 ? sec : 30, labels, constrain(planes, 0, 200), vsync);
+      long mhz = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 10;
+      demoDouble(sec > 0 ? sec : 30, labels, constrain(planes, 0, 200), vsync, constrain(mhz, 1, 10) * 1000000);  // 20MHz では状態の読みが化けた
       break;
     }
     case 'B': pageSelfTest(); break;  // ページの切り替えと LT7680 の中でのコピーを確かめる (選んだ基板)
