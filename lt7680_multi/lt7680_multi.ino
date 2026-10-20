@@ -694,7 +694,7 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
   Serial.printf("cmd G: setup %lu ms (%d movers)\n", (unsigned long)(millis() - s0), N);
 
   int front = 0;
-  uint32_t t0 = millis(), frames = 0, busy = 0, worst = 0;
+  uint32_t t0 = millis(), frames = 0, busy = 0, worst = 0, shown = 0, nearEdge = 0;
   while (millis() - t0 < (uint32_t)seconds * 1000) {
     uint32_t f0 = micros();
     int back = 1 - front;
@@ -721,6 +721,16 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
       GMover &o = m[i];
       locate(o.p, o.size, &o.nb, &o.cx, &o.cy, &o.f, &o.fx, &o.fy);
       o.q = (o.nb >= 0 && labels) ? southOnPanel(o.p, o.nb) : 0;
+      o.eb = o.rb[back];
+      o.ex = o.rx[back];
+      o.ey = o.ry[back];
+      o.ew = o.rw[back];
+      o.eh = o.rh[back];
+      o.rb[back] = -1;
+      if (o.nb >= 0) {
+        shown++;
+        if (min(min(o.cx, o.cy), min(479 - o.cx, 479 - o.cy)) < 8) nearEdge++;
+      }
     }
     // 基板ごとに「前の切り替えが効くのを待つ → 2 コマ前の四角を消す → 描く → 切り替える」。
     // 基板 0 を待つ間に基板 1、2 の切り替えも効いていくので、待ち時間が重ならない
@@ -729,9 +739,8 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
       if (vsync && frames > 0) vsyncWait();
       for (int i = 0; i < N; i++) {
         GMover &o = m[i];
-        if (o.rb[back] != b) continue;
-        bteBlit(2, o.rx[back], o.ry[back], back, o.rx[back], o.ry[back], o.rw[back], o.rh[back], false);
-        o.rb[back] = -1;
+        if (o.eb != b) continue;  // 基板を移った飛行機は、前の基板の番で消す
+        bteBlit(2, o.ex, o.ey, back, o.ex, o.ey, o.ew, o.eh, false);
       }
       for (int i = 0; i < N; i++) {
         GMover &o = m[i];
@@ -765,6 +774,7 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
   regCacheClear();
   curBoard = keep;
   free(m);
+  Serial.printf("cmd G: drawn %lu times, %.1f%% within 8 px of the panel edge\n", (unsigned long)shown, 100.0 * nearEdge / (shown ? shown : 1));
   Serial.printf("cmd G: %s, %d movers%s, %lu frames in %d s, work %.1f ms/frame (worst %.1f), %.0f fps if not held to 30\n", vsync ? "vsync" : "no vsync", N,
                 labels ? " with labels" : "", (unsigned long)frames, seconds, busy / 1000.0 / frames, worst / 1000.0, frames * 1e6 / busy);
 }
