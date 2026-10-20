@@ -9,9 +9,10 @@
 // LCM_SDO (MISO) の共有は、非選択の LT7680 が SDO をハイインピーダンスにする場合だけ成立する (2 枚では成立を確認)
 //
 // 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、K/W 黒/白、r 状態、b バックライト
-// 面の割り当て (先頭の '#' は無くてよい): x,n で基板 x に面 n (0-5) を割り当てて描く。不揮発領域に保存し、再起動後も使う
+// 面の割り当て (先頭の '#' は無くてよい): x,n[,r] で基板 x に面 n (0-5) を、時計回りに 90 度 x r (0-3) 回して描く。不揮発領域に保存し、再起動後も使う
 
 #include "earth_qsc480x6.h"
+#include "rotate.h"
 #include <Preferences.h>
 #include <SPI.h>
 
@@ -24,6 +25,8 @@
 #define NUM_FACES 6
 // 基板ごとの面。既定は基板 b に側面 b、x,n 命令で変えて不揮発領域 ("cube" の "f<b>") に保存する
 int faceOf[NUM_BOARDS];
+// 基板ごとの回転 (時計回りに 90 度 x r、パネルを表から見て)。x,n,r 命令で変えて "r<b>" に保存する
+int rotOf[NUM_BOARDS];
 Preferences prefs;
 // (関数にすると Arduino の自動プロトタイプがここに入り、後ろの enum より前に来てビルドが壊れる)
 #define boardFace(b) (EARTH_QSC480X6[faceOf[b]])
@@ -348,8 +351,9 @@ void drawFace(const uint16_t *face) {
   uint8_t buf[64];
   int n = 0;
   uint32_t t0 = millis();
+  int rot = rotOf[curBoard];
   for (uint32_t i = 0; i < 480u * 480u; i++) {
-    uint16_t c = face[i];
+    uint16_t c = face[rotatedIndex(i % 480u, i / 480u, rot)];
     buf[n++] = c & 0xFF;
     buf[n++] = c >> 8;
     if (n == sizeof(buf)) {
@@ -470,7 +474,7 @@ void setup() {
                 "74HC138",
 #endif
                 (unsigned long)pixelHz);
-  for (int b = 0; b < NUM_BOARDS; b++) Serial.printf("diag: board %d lt7680 %s, face %d\n", b, ok[b] ? "OK" : "FAILED", faceOf[b]);
+  for (int b = 0; b < NUM_BOARDS; b++) Serial.printf("diag: board %d lt7680 %s, face %d, turn %d\n", b, ok[b] ? "OK" : "FAILED", faceOf[b], rotOf[b]);
   Serial.printf("diag: boot %u-%u ms, STSR=0x%02X\n", t0, t1, readStatus());
 #else
   // 以前の起動 (LCD_CS が抜けていた頃の対症療法): 1.5 秒待ってから「流れ」を BOOT_FLOWS 回
@@ -494,29 +498,39 @@ void loadFaces() {
     char key[4] = {'f', (char)('0' + b), 0};
     int n = prefs.getInt(key, b % 4);
     faceOf[b] = (n >= 0 && n < NUM_FACES) ? n : b % 4;
+    key[0] = 'r';
+    rotOf[b] = prefs.getInt(key, 0) & 3;
   }
   prefs.end();
 }
 
-// x,n の x を読んだあと: ',' が来れば面番号を読んで割り当てる。来なければ false
+// x,n[,r] の x を読んだあと: ',' が来れば面番号 (と回転) を読んで割り当てる。来なければ false
 bool assignFace(int x) {
   uint32_t t = millis();
   while (!Serial.available() && millis() - t < 50) delay(1);
   if (Serial.peek() != ',') return false;
   Serial.read();
   long n = Serial.parseInt();
-  if (x >= NUM_BOARDS || n < 0 || n >= NUM_FACES) {
-    Serial.printf("assign: board must be 0-%d, face 0-%d\n", NUM_BOARDS - 1, NUM_FACES - 1);
+  long r = x < NUM_BOARDS ? rotOf[x] : 0;  // 回転を省くと今のまま
+  if (Serial.peek() == ',') {
+    Serial.read();
+    r = Serial.parseInt();
+  }
+  if (x >= NUM_BOARDS || n < 0 || n >= NUM_FACES || r < 0 || r > 3) {
+    Serial.printf("assign: board must be 0-%d, face 0-%d, turn 0-3\n", NUM_BOARDS - 1, NUM_FACES - 1);
     return true;
   }
   faceOf[x] = n;
+  rotOf[x] = r;
   char key[4] = {'f', (char)('0' + x), 0};
   prefs.begin("cube", false);
   prefs.putInt(key, n);
+  key[0] = 'r';
+  prefs.putInt(key, r);
   prefs.end();
   int keep = curBoard;
   curBoard = x;
-  Serial.printf("assign: board %d face %ld (saved)\n", x, n);
+  Serial.printf("assign: board %d face %ld turn %ld (saved)\n", x, n, r);
   drawFace(boardFace(x));
   curBoard = keep;
   return true;

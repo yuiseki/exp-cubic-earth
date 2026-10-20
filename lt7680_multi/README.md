@@ -75,6 +75,8 @@ esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset \
 
 基板ごとの面は、シリアルに `x,n` (改行で終わる、先頭の `#` は有っても無くてもよい) を送ると変わる。基板 x に面 n を割り当ててすぐ描き、XIAO の不揮発領域 (Preferences の名前空間 `cube`、キー `f<x>`) に保存するので、再起動後もその面で起動する。保存が無ければ基板 b に面 b。起動ログの `diag: board b lt7680 OK, face n` で今の割り当てが分かる。
 
+面の画像は回して映せる。`x,n,r` と送ると、基板 x に面 n を時計回りに 90 度 x r (0〜3、パネルを表から見て) 回して描き、回転も `r<x>` に保存する。`x,n` だけなら回転は今のまま。起動ログは `face n, turn r`。立方体の配置ごとの n と r は `simulate/` の `geometry.earth_turns` が出す (画像の上の行がパネルの上の辺、FPC と反対の辺に映ると仮定。違えば全部の r が同じだけずれる)。回転の計算は `test/test_rotate.cpp` (`g++ -std=c++17 -o /tmp/test_rotate test/test_rotate.cpp && /tmp/test_rotate`)。
+
 生成は `lt7680_earth/make_qsc_faces.py`:
 
 ```sh

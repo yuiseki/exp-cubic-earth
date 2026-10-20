@@ -175,6 +175,29 @@ def fpc_edge_meetings(plan):
     return [(a, b) for i, (a, ea) in enumerate(edges) for b, eb in edges[i + 1:] if ea == eb]
 
 
+# QSC face (lt7680_multi/earth_qsc480x6.h) on each cube face: the sides go
+# east (counterclockwise seen from above) from A, the north pole on top
+EARTH_FACE = {"A": 0, "B": 1, "D": 2, "C": 3, "top": 4, "bottom": 5}
+# where each face image's top must point: north on the sides, and the poles
+# joined to face 0 (A, -y): face 4's bottom edge and face 5's top edge on it
+EARTH_UP = {"A": (0, 0, 1), "B": (0, 0, 1), "C": (0, 0, 1), "D": (0, 0, 1), "top": (0, 1, 0), "bottom": (0, -1, 0)}
+
+
+def earth_turns(plan):
+    """For each face, (QSC face, r): turn that face's image r quarter turns
+    clockwise (lt7680_multi's x,n,r) so it joins its neighbours. Assumes the
+    image's top row is shown along the panel's top edge (away from the FPC
+    edge), not mirrored; if not, every r is off by the same amount."""
+    out = {}
+    for f in plan.faces:
+        up, right = f.rotation @ [0, 1, 0], f.rotation @ [1, 0, 0]
+        # after r clockwise quarter turns the image's top is toward these
+        tops = [up, right, -up, -right]
+        r = next(i for i, t in enumerate(tops) if np.allclose(t, EARTH_UP[f.name]))
+        out[f.name] = (EARTH_FACE[f.name], r)
+    return out
+
+
 CORNER = np.array([1.0, -1.0, 1.0]) / np.sqrt(3)  # the first module's corner
 
 

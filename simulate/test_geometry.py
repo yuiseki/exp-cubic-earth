@@ -77,3 +77,18 @@ def test_every_plan_gives_each_face_one_fpc_edge_on_the_cube():
         edges = g.fpc_edges(g.Plan(dict(kv.split("=") for kv in r["plan"].split(","))))
         assert len(edges) == 6 and all(len(e) == 2 for e in edges.values())
         assert r["meetings"] == len(g.fpc_edge_meetings(g.Plan(dict(kv.split("=") for kv in r["plan"].split(",")))))
+
+
+def test_earth_turns_put_north_up_on_the_sides_and_face_0_below_the_north_pole():
+    # a plan where every side panel stands upright (FPC edge down) needs no turn there
+    plan = g.Plan({"top": "-y", "A": "-z", "B": "-z"})
+    turns = g.earth_turns(plan)
+    assert turns["A"] == (0, 0) and turns["B"] == (1, 0)
+    # top: FPC edge toward A (-y), so the panel's top is +y, as face 4's top
+    assert turns["top"] == (4, 0)
+    assert {f: q for f, (q, _) in turns.items()} == g.EARTH_FACE
+
+
+def test_earth_turns_of_the_chosen_plan():
+    turns = g.earth_turns(g.Plan({"top": "-x", "A": "-z", "B": "+y"}))
+    assert all(0 <= r <= 3 for _, r in turns.values())
