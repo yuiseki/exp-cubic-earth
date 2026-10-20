@@ -175,26 +175,41 @@ def fpc_edge_meetings(plan):
     return [(a, b) for i, (a, ea) in enumerate(edges) for b, eb in edges[i + 1:] if ea == eb]
 
 
-# QSC face (lt7680_multi/earth_qsc480x6.h) on each cube face: the sides go
-# east (counterclockwise seen from above) from A, the north pole on top
-EARTH_FACE = {"A": 0, "B": 1, "D": 2, "C": 3, "top": 4, "bottom": 5}
-# where each face image's top must point: north on the sides, and the poles
-# joined to face 0 (A, -y): face 4's bottom edge and face 5's top edge on it
-EARTH_UP = {"A": (0, 0, 1), "B": (0, 0, 1), "C": (0, 0, 1), "D": (0, 0, 1), "top": (0, 1, 0), "bottom": (0, -1, 0)}
+# The side faces in the order the QSC faces go east (counterclockwise seen
+# from above); lt7680_multi/earth_qsc480x6.h has faces 0-3 on the sides, the
+# north pole 4 joined to face 0's top edge and the south pole 5 to its bottom
+SIDES_EAST = ["A", "B", "D", "C"]
 
 
-def earth_turns(plan):
+def earth_faces(face0="A"):
+    """Cube face -> QSC face, with QSC face 0 on `face0`."""
+    i = SIDES_EAST.index(face0)
+    out = {f: k for k, f in enumerate(SIDES_EAST[i:] + SIDES_EAST[:i])}
+    out.update(top=4, bottom=5)
+    return out
+
+
+EARTH_FACE = earth_faces()
+
+
+def earth_turns(plan, face0="A"):
     """For each face, (QSC face, r): turn that face's image r quarter turns
-    clockwise (lt7680_multi's x,n,r) so it joins its neighbours. Assumes the
-    image's top row is shown along the panel's top edge (away from the FPC
-    edge), not mirrored; if not, every r is off by the same amount."""
+    clockwise (lt7680_multi's x,n,r) so it joins its neighbours, with QSC
+    face 0 on `face0`. Assumes the image's top row is shown along the
+    panel's top edge (away from the FPC edge), not mirrored; if not, every
+    r is off by the same amount."""
+    normal = {f.name: f.normal for f in plan.faces}
+    # the image's top: north on the sides; the poles' edges joined to face 0
+    want = {f: np.array([0.0, 0.0, 1.0]) for f in SIDES_EAST}
+    want["top"], want["bottom"] = -normal[face0], normal[face0]
+    faces = earth_faces(face0)
     out = {}
     for f in plan.faces:
         up, right = f.rotation @ [0, 1, 0], f.rotation @ [1, 0, 0]
         # after r clockwise quarter turns the image's top is toward these
         tops = [up, right, -up, -right]
-        r = next(i for i, t in enumerate(tops) if np.allclose(t, EARTH_UP[f.name]))
-        out[f.name] = (EARTH_FACE[f.name], r)
+        r = next(i for i, t in enumerate(tops) if np.allclose(t, want[f.name]))
+        out[f.name] = (faces[f.name], r)
     return out
 
 

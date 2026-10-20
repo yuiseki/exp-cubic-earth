@@ -92,3 +92,14 @@ def test_earth_turns_put_north_up_on_the_sides_and_face_0_below_the_north_pole()
 def test_earth_turns_of_the_chosen_plan():
     turns = g.earth_turns(g.Plan({"top": "-x", "A": "-z", "B": "+y"}))
     assert all(0 <= r <= 3 for _, r in turns.values())
+
+
+def test_earth_turns_can_start_the_sides_on_another_face():
+    plan = g.Plan({"top": "-x", "A": "-z", "B": "+y"})
+    turns = g.earth_turns(plan, face0="B")
+    assert {f: q for f, (q, _) in turns.items()} == {"B": 0, "D": 1, "C": 2, "A": 3, "top": 4, "bottom": 5}
+    # the sides keep their turns (north is up whichever face is face 0)
+    default = g.earth_turns(plan)
+    assert all(turns[f][1] == default[f][1] for f in "ABCD")
+    # top: its FPC edge points to -x, so the panel's top is +x; face 4's top must point away from B (+x)
+    assert turns["top"] == (4, 2)
