@@ -7,6 +7,10 @@ struct Mover {
   float speed;
   int size;  // 印の一辺 (画素)
   bool ship;
-  int board;   // 描いている基板 (-1 = どの基板の面にも載っていない)
-  int px, py;  // 描いている左上 (パネルの座標)
+  char label[8];  // 印の横に出す名前 (空なら出さない)
+  int board;      // 描いている基板 (-1 = どの基板の面にも載っていない)
+  int mx, my;     // 描いている印の左上 (パネルの座標)
+  int lx, ly;     // 描いているラベルの左上
+  int lq;         // ラベルの向き: 文字の下が 0 下、1 右、2 上、3 左 (その場所の南の向き)
+  int bx, by, bw, bh;  // 印とラベルを囲む四角
 };

@@ -14,6 +14,7 @@
 #include "earth_qsc480x6.h"
 #include "rotate.h"
 #include "qsc.h"
+#include "font5x7.h"
 #include "mover.h"  // (構造体は .ino に書くと Arduino の自動プロトタイプより後ろになる)
 #include <Preferences.h>
 #include <SPI.h>
@@ -29,6 +30,7 @@
 int faceOf[NUM_BOARDS];
 // 基板ごとの回転 (時計回りに 90 度 x r、パネルを表から見て)。x,n,r 命令で変えて "r<b>" に保存する
 int rotOf[NUM_BOARDS];
+bool windowFull = true;  // 作業ウィンドウが全面か。drawRegion は狭めたままにし、fillRect の前に戻す
 Preferences prefs;
 // (関数にすると Arduino の自動プロトタイプがここに入り、後ろの enum より前に来てビルドが壊れる)
 #define boardFace(b) (EARTH_QSC480X6[faceOf[b]])
@@ -328,6 +330,8 @@ void waitDrawDone() {
 
 // RGB565 の色で、(x1,y1)-(x2,y2) の四角形を塗りつぶす (LCD.cpp の DrawSquare_Fill と同じ)
 void fillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color) {
+  windowFull = false;  // どの基板の窓が狭いままか覚えていないので、毎回戻す
+  fullWindow();
   writeReg(0xD2, color >> 8);
   writeReg(0xD3, color >> 3);
   writeReg(0xD4, color << 3);
@@ -364,11 +368,16 @@ bool drawRegionOver(const uint16_t *face, int x0, int y0, int w, int h, const Mo
   int n = 0;
   int rot = rotOf[curBoard];
   uint32_t count = (uint32_t)w * h;
+  // 重ねる印は、選んだ基板にあって四角に掛かるものだけに先に絞る (画素ごとに全部を調べると重い)
+  const Mover *hit[64];
+  int nh = 0;
+  for (int j = 0; j < nm && nh < 64; j++)
+    if (ms[j].board == curBoard && ms[j].bx < x0 + w && ms[j].bx + ms[j].bw > x0 && ms[j].by < y0 + h && ms[j].by + ms[j].bh > y0) hit[nh++] = &ms[j];
   for (uint32_t i = 0; i < count; i++) {
     int x = x0 + i % w, y = y0 + i / w;
     uint16_t c = face[rotatedIndex(x, y, rot)];
-    for (int j = 0; j < nm; j++) {
-      int mc = ms[j].board == curBoard ? moverColorAt(ms[j], x, y) : -1;
+    for (int j = 0; j < nh; j++) {
+      int mc = moverColorAt(*hit[j], x, y);
       if (mc >= 0) c = mc;
     }
     buf[n++] = c & 0xFF;
@@ -391,13 +400,18 @@ bool drawRegionOver(const uint16_t *face, int x0, int y0, int w, int h, const Mo
       n = 0;
     }
   }
-  if (w != 480 || h != 480) {  // 図形の描画は作業ウィンドウの中に限られるので、全面に戻す
-    writeReg16(0x56, 0);
-    writeReg16(0x58, 0);
-    writeReg16(0x5A, 480);
-    writeReg16(0x5C, 480);
-  }
+  windowFull = w == 480 && h == 480;
   return true;
+}
+
+// 図形の描画は作業ウィンドウの中に限られるので、四角を塗る前に全面に戻す (drawRegion は窓を狭めたままにする)
+void fullWindow() {
+  if (windowFull) return;
+  writeReg16(0x56, 0);
+  writeReg16(0x58, 0);
+  writeReg16(0x5A, 480);
+  writeReg16(0x5C, 480);
+  windowFull = true;
 }
 
 // 選んだ基板の表示用メモリに face を書く (480x480 で約 0.6 秒、画素 20MHz)
@@ -418,12 +432,76 @@ bool isSeaPixel(int face, int x, int y) {
   return r < 6 && g < 12 && b >= 6;  // Blue Marble の海は暗い紺
 }
 
-// 印が (x, y) を覆っていればその色、覆っていなければ -1。船は白い四角、飛行機は黄色い十字 (胴体と翼、太さ 3)
+// 印かラベルが (x, y) を覆っていればその色、覆っていなければ -1。
+// 船は白い四角、飛行機は黄色い十字 (胴体と翼、太さ 3)、ラベルは 5x7 の文字で印と同じ色
 int moverColorAt(const Mover &m, int x, int y) {
-  int dx = x - m.px, dy = y - m.py, s = m.size, c = s / 2;
-  if (m.board < 0 || dx < 0 || dy < 0 || dx >= s || dy >= s) return -1;
-  if (m.ship) return 0xFFFF;
-  return (abs(dx - c) <= 1 || abs(dy - c) <= 1) ? 0xFFE0 : -1;
+  if (m.board < 0 || x < m.bx || y < m.by || x >= m.bx + m.bw || y >= m.by + m.bh) return -1;
+  uint16_t col = m.ship ? 0xFFFF : 0xFFE0;
+  int dx = x - m.mx, dy = y - m.my, s = m.size, c = s / 2;
+  if (dx >= 0 && dy >= 0 && dx < s && dy < s) {
+    if (m.ship || abs(dx - c) <= 1 || abs(dy - c) <= 1) return col;
+  }
+  int W = strlen(m.label) * 5, u = x - m.lx, v = y - m.ly, tx, ty;  // (u, v): ラベルの四角の中、(tx, ty): 回す前の文字列の中
+  bool side = m.lq & 1;
+  if (u < 0 || v < 0 || u >= (side ? 7 : W) || v >= (side ? W : 7)) return -1;
+  switch (m.lq) {
+    case 1: tx = W - 1 - v; ty = u; break;      // 文字の下が右 (90 度左に回す)
+    case 2: tx = W - 1 - u; ty = 6 - v; break;  // 文字の下が上
+    case 3: tx = v; ty = 6 - u; break;          // 文字の下が左 (90 度右に回す)
+    default: tx = u; ty = v; break;
+  }
+  char ch = m.label[tx / 5];
+  if (ch < 32 || ch > 95) return -1;
+  return (FONT5X7[ch - 32][ty] >> (4 - tx % 5)) & 1 ? col : -1;
+}
+
+// 点 p の南の向きを、基板 b のパネルの上の 4 方向 (lq と同じ番号) で返す。p の少し南の点との差を投影して、回転を付けて決める
+int southOnPanel(const float *p, int b) {
+  float nv[3] = {-p[2] * p[0], -p[2] * p[1], 1 - p[2] * p[2]}, len = sqrtf(qscDot(nv, nv));  // p での北の向き
+  if (len < 1e-4f) return 0;  // 極そのもの
+  float q[3], x0, y0, x1, y1;
+  for (int i = 0; i < 3; i++) q[i] = p[i] - 0.01f * nv[i] / len;
+  int f0 = qscProject(qsc, p, &x0, &y0), f1 = qscProject(qsc, q, &x1, &y1);
+  float dx = x1 - x0, dy = y1 - y0;
+  if (f1 != f0) {  // 南の点が隣の面に出た: 北へずらした点との差を逆向きに使う
+    for (int i = 0; i < 3; i++) q[i] = p[i] + 0.01f * nv[i] / len;
+    qscProject(qsc, q, &x1, &y1);
+    dx = x0 - x1;
+    dy = y0 - y1;
+  }
+  float X, Y;  // 画像の向きをパネルの向きへ (panelOf と同じ回し方)
+  switch (rotOf[b] & 3) {
+    case 1: X = -dy; Y = dx; break;
+    case 2: X = -dx; Y = -dy; break;
+    case 3: X = dy; Y = -dx; break;
+    default: X = dx; Y = dy; break;
+  }
+  if (fabsf(Y) >= fabsf(X)) return Y > 0 ? 0 : 2;
+  return X > 0 ? 1 : 3;
+}
+
+// 印の中心 (cx, cy) から、印、ラベル、それらを囲む四角の位置を決める。ラベルは文字の向き lq で、
+// 読む向きの先 (lq 0: 右、1: 上、2: 左、3: 下) に置き、パネルに収まらなければ反対側に置く
+void placeMover(Mover &m, int cx, int cy, int lq) {
+  int s = m.size, W = strlen(m.label) * 5;
+  m.mx = constrain(cx - s / 2, 0, 480 - s);
+  m.my = constrain(cy - s / 2, 0, 480 - s);
+  m.lq = lq;
+  if (W == 0) { m.bx = m.mx; m.by = m.my; m.bw = s; m.bh = s; m.lx = m.ly = -100; return; }
+  int lw = (lq & 1) ? 7 : W, lh = (lq & 1) ? W : 7;
+  int ccx = m.mx + s / 2, ccy = m.my + s / 2;
+  // 読む向きの先と、その反対
+  int ax[4] = {m.mx + s + 2, ccx - lw / 2, m.mx - 2 - lw, ccx - lw / 2};
+  int ay[4] = {ccy - lh / 2, m.my - 2 - lh, ccy - lh / 2, m.my + s + 2};
+  int dir = lq == 0 ? 0 : lq == 1 ? 1 : lq == 2 ? 2 : 3;
+  int lx = ax[dir], ly = ay[dir];
+  if (lx < 0 || ly < 0 || lx + lw > 480 || ly + lh > 480) { lx = ax[(dir + 2) % 4]; ly = ay[(dir + 2) % 4]; }
+  m.lx = constrain(lx, 0, 480 - lw);
+  m.ly = constrain(ly, 0, 480 - lh);
+  m.bx = min(m.mx, m.lx);
+  m.by = min(m.my, m.ly);
+  m.bw = max(m.mx + s, m.lx + lw) - m.bx;
+  m.bh = max(m.my + s, m.ly + lh) - m.by;
 }
 
 // 進む向きをランダムに選び直す (p に直交する単位ベクトル)
@@ -441,7 +519,7 @@ void randomPoint(float *v) {
   qscSet(v, r * cosf(a), r * sinf(a), z);
 }
 
-// 点 v を描く基板と、その基板のパネルでの印の左上を求める。どの基板の面にも載っていなければ board = -1
+// 点 v を描く基板と、その基板のパネルでの位置を求める。どの基板の面にも載っていなければ board = -1
 void locate(const float *v, int size, int *board, int *px, int *py, int *face, int *fx, int *fy) {
   float x, y;
   *face = qscProject(qsc, v, &x, &y);
@@ -453,8 +531,8 @@ void locate(const float *v, int size, int *board, int *px, int *py, int *face, i
   if (*board < 0) return;
   uint32_t X, Y;
   panelOf(*fx, *fy, rotOf[*board], &X, &Y);
-  *px = constrain((int)X - size / 2, 0, 480 - size);
-  *py = constrain((int)Y - size / 2, 0, 480 - size);
+  *px = X;  // 印の中心
+  *py = Y;
 }
 
 bool onShownFace(const float *v) {
@@ -463,9 +541,10 @@ bool onShownFace(const float *v) {
   return b >= 0;
 }
 
-void demoMovers(int seconds) {
-  const int PLANES = 5 * NUM_BOARDS, SHIPS = 4 * NUM_BOARDS, N = PLANES + SHIPS;
-  Mover m[N];
+void demoMovers(int seconds, bool labels, int planesPerBoard) {
+  const int PLANES = planesPerBoard * NUM_BOARDS, SHIPS = 4 * NUM_BOARDS, N = PLANES + SHIPS;
+  Mover *m = (Mover *)calloc(N, sizeof(Mover));  // 数百機はスタックに載らない
+  if (!m) { Serial.println("cmd D: out of memory"); return; }
   randomSeed(esp_random());
   for (int k = 0; k < N; k++) {
     Mover &o = m[k];
@@ -473,6 +552,9 @@ void demoMovers(int seconds) {
     o.size = o.ship ? 5 : 11;
     o.speed = (o.ship ? 0.0005f : random(25, 60) / 10000.0f);  // ラジアン/コマ (飛行機は 0.14〜0.34 度)
     o.board = -1;
+    if (!labels) o.label[0] = 0;
+    else if (o.ship) snprintf(o.label, sizeof(o.label), "MARU-%d", k - PLANES + 1);
+    else snprintf(o.label, sizeof(o.label), "%s%03d", (k % 2) ? "JL" : "NH", (int)random(100, 999));
     for (int t = 0; t < 500; t++) {  // 映っている面の上 (船は海の上) から始める
       randomPoint(o.p);
       int b, px, py, f, fx, fy;
@@ -482,9 +564,9 @@ void demoMovers(int seconds) {
     randomHeading(o);
   }
   int keep = curBoard;
-  uint32_t t0 = millis(), frames = 0;
+  uint32_t t0 = millis(), frames = 0, busy = 0, worst = 0;
   while (millis() - t0 < (uint32_t)seconds * 1000) {
-    uint32_t f0 = millis();
+    uint32_t f0 = micros();
     for (int i = 0; i < N; i++) {
       Mover &o = m[i];
       float c = cosf(o.speed), s = sinf(o.speed), np[3], nd[3];
@@ -500,38 +582,39 @@ void demoMovers(int seconds) {
       }
       memcpy(o.p, np, sizeof(np));
       memcpy(o.d, nd, sizeof(nd));
-      int ob = o.board, ox = o.px, oy = o.py;
-      if (nb == ob && npx == ox && npy == oy) continue;  // 画素が変わらなければ書かない
+      Mover old = o;
+      if (nb >= 0) placeMover(o, npx, npy, o.label[0] ? southOnPanel(np, nb) : 0);
       o.board = nb;
-      o.px = npx;
-      o.py = npy;
-      if (ob >= 0 && (ob != nb || abs(ox - npx) > o.size || abs(oy - npy) > o.size)) {
-        curBoard = ob;  // 別の基板へ移った (面の境目をまたいだ) か大きく飛んだ: 前の場所を消す
-        drawRegionOver(boardFace(ob), ox, oy, o.size, o.size, m, N);
-        ob = -1;
+      if (nb == old.board && (nb < 0 || (o.bx == old.bx && o.by == old.by && o.bw == old.bw))) continue;  // 画素が変わらなければ書かない
+      int ux = min(o.bx, old.bx), uy = min(o.by, old.by);
+      int uw = max(o.bx + o.bw, old.bx + old.bw) - ux, uh = max(o.by + o.bh, old.by + old.bh) - uy;
+      bool together = old.board >= 0 && nb == old.board && uw * uh <= 2 * (o.bw * o.bh + old.bw * old.bh);
+      if (old.board >= 0 && !together) {  // 別の基板へ移った (面の境目をまたいだ) か大きく飛んだ: 前の場所を消す
+        curBoard = old.board;
+        drawRegionOver(boardFace(old.board), old.bx, old.by, old.bw, old.bh, m, N);
       }
       if (nb < 0) continue;  // 映っていない面にいる
       curBoard = nb;
-      if (ob < 0) {
-        drawRegionOver(boardFace(nb), npx, npy, o.size, o.size, m, N);
-      } else {
-        int x0 = min(ox, npx), y0 = min(oy, npy);
-        drawRegionOver(boardFace(nb), x0, y0, max(ox, npx) + o.size - x0, max(oy, npy) + o.size - y0, m, N);
-      }
+      if (together) drawRegionOver(boardFace(nb), ux, uy, uw, uh, m, N);
+      else drawRegionOver(boardFace(nb), o.bx, o.by, o.bw, o.bh, m, N);
     }
     frames++;
-    uint32_t spent = millis() - f0;
-    if (spent < 33) delay(33 - spent);  // 30 コマ/秒に揃える
+    uint32_t spent = micros() - f0;
+    busy += spent;
+    worst = max(worst, spent);
+    if (spent < 33000) delay((33000 - spent) / 1000);  // 30 コマ/秒に揃える
   }
   for (int i = 0; i < N; i++) {  // 片付け
     if (m[i].board < 0) continue;
     int b = m[i].board;
     m[i].board = -1;
     curBoard = b;
-    drawRegionOver(boardFace(b), m[i].px, m[i].py, m[i].size, m[i].size, m, N);
+    drawRegionOver(boardFace(b), m[i].bx, m[i].by, m[i].bw, m[i].bh, m, N);
   }
   curBoard = keep;
-  Serial.printf("cmd D: %d movers, %lu frames in %d s\n", N, (unsigned long)frames, seconds);
+  free(m);
+  Serial.printf("cmd D: %d movers%s, %lu frames in %d s, work %.1f ms/frame (worst %.1f), %.0f fps if not held to 30\n", N, labels ? " with labels" : "",
+                (unsigned long)frames, seconds, busy / 1000.0 / frames, worst / 1000.0, frames * 1e6 / busy);
 }
 
 // 印を動かす速さを測る: 1 コマごとに、前の印の場所を face で描き直し、新しい場所に s x s の赤い四角を塗る。
@@ -789,9 +872,11 @@ void loop() {
       }
       break;
     }
-    case 'D': {  // #D<秒> 架空の飛行機と船を動かす (既定 30 秒)
+    case 'D': {  // #D<秒>[,<ラベル 0/1>[,<基板あたりの飛行機>]] 架空の飛行機と船を動かす (既定 30 秒、ラベル無し、5 機)
       long sec = Serial.parseInt();
-      demoMovers(sec > 0 ? sec : 30);
+      bool labels = Serial.peek() == ',' && (Serial.read(), Serial.parseInt() == 1);
+      long planes = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 5;
+      demoMovers(sec > 0 ? sec : 30, labels, constrain(planes, 0, 200));
       break;
     }
     case 'T': {  // #T<コマ数>,<大きさ> 印を動かす速さを測る (既定 200 コマ、12 画素)
