@@ -420,6 +420,66 @@ void drawFace(const uint16_t *face) {
   if (drawRegion(face, 0, 0, 480, 480)) Serial.printf("board %d: face written in %lu ms\n", curBoard, (unsigned long)(millis() - t0));
 }
 
+// ---- 表示用メモリの中の複数の画面 (ダブルバッファ用) ----
+// LT7680A-R の表示用メモリは 16MB。480x480 の 16 ビット色 1 枚 (460,800 バイト) を「ページ」と呼び、
+// ページ 0 と 1 を表と裏、ページ 2 を地球の画像 (消すときのコピー元) に使う
+static const uint32_t PAGE_BYTES = 480u * 480u * 2u;
+uint32_t pageAddr(int page) { return PAGE_BYTES * page; }
+
+// 主画面 (パネルに映す) の開始アドレス。REG[23h] を書いた時点で反映される
+void showPage(int page) { writeReg32(0x20, pageAddr(page)); }
+
+// キャンバス (画素の書き込みと図形の描画の行き先) の開始アドレス
+void drawToPage(int page) { writeReg32(0x50, pageAddr(page)); }
+
+void waitBte() {
+  uint32_t t0 = millis();
+  while (readReg(0x90) & 0x10) {
+    if (millis() - t0 > 100) { Serial.printf("TIMEOUT waiting for BTE (board %d)\n", curBoard); return; }
+  }
+}
+
+// LT7680 の中で、ページ sp の (sx, sy) から w x h をページ dp の (dx, dy) へ写す (BTE の Memory Copy、ROP = S0)
+void bteCopy(int sp, int sx, int sy, int dp, int dx, int dy, int w, int h) {
+  writeReg32(0x93, pageAddr(sp));
+  writeReg16(0x97, 480);
+  writeReg16(0x99, sx);
+  writeReg16(0x9B, sy);
+  writeReg32(0xA7, pageAddr(dp));
+  writeReg16(0xAB, 480);
+  writeReg16(0xAD, dx);
+  writeReg16(0xAF, dy);
+  writeReg16(0xB1, w);
+  writeReg16(0xB3, h);
+  writeReg(0x92, 0x25);  // S0、S1、行き先とも 16bpp
+  writeReg(0x91, 0xC2);  // ROP = S0、Memory Copy with ROP
+  writeReg(0x90, 0x10);  // 開始
+  waitBte();
+}
+
+// 1 歩目の確かめ (#B): 地球の画像をページ 2 に書き、LT7680 の中でページ 1 へ写して、表示をページ 1 に切り替える。
+// そのあと、ページ 1 の左上 1/4 だけを黒く塗ってから、ページ 2 の同じ所を写して戻す
+void pageSelfTest() {
+  uint32_t t0 = millis();
+  drawToPage(2);
+  drawRegion(boardFace(curBoard), 0, 0, 480, 480);
+  uint32_t t1 = millis();
+  bteCopy(2, 0, 0, 1, 0, 0, 480, 480);
+  uint32_t t2 = millis();
+  showPage(1);
+  Serial.printf("cmd B: board %d face to page 2 in %lu ms, copied to page 1 in %lu ms, showing page 1\n", curBoard,
+                (unsigned long)(t1 - t0), (unsigned long)(t2 - t1));
+  drawToPage(1);
+  delay(1500);
+  fillRect(0, 0, 239, 239, 0x0000);
+  Serial.println("cmd B: page 1 top left black");
+  delay(1500);
+  uint32_t t3 = micros();
+  bteCopy(2, 0, 0, 1, 0, 0, 240, 240);
+  Serial.printf("cmd B: top left restored from page 2 in %lu us\n", (unsigned long)(micros() - t3));
+  drawToPage(0);
+}
+
 // 架空の飛行機と船を動かす (#D<秒>)。位置は経度・緯度 (単位ベクトル) で持ち、大円に沿って進める。
 // 毎コマ QSC 投影で面と画素に直し、その面を映している基板に、基板の回転を付けて描くので、面の境目をそのまままたぐ。
 // 飛行機は黄色い十字、船は白い点で、船は進む先が陸 (面の画像で海の色でない画素) なら向きを変える。
@@ -879,6 +939,7 @@ void loop() {
       demoMovers(sec > 0 ? sec : 30, labels, constrain(planes, 0, 200));
       break;
     }
+    case 'B': pageSelfTest(); break;  // ページの切り替えと LT7680 の中でのコピーを確かめる (選んだ基板)
     case 'T': {  // #T<コマ数>,<大きさ> 印を動かす速さを測る (既定 200 コマ、12 画素)
       long n = Serial.parseInt();
       long sz = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 12;
