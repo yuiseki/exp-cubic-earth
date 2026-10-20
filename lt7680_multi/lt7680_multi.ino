@@ -35,7 +35,10 @@ QscFaces qsc;  // 地球の面への投影 (setup で初期化)
 bool windowFull = true;  // 作業ウィンドウが全面か。drawRegion は狭めたままにし、fillRect の前に戻す
 Preferences prefs;
 // (関数にすると Arduino の自動プロトタイプがここに入り、後ろの enum より前に来てビルドが壊れる)
-#define boardFace(b) (EARTH_QSC480X6[faceOf[b]])
+#define boardFace(b) (faceImage(faceOf[b]))
+// 送られてきた面の画像 (#U、PSRAM)。無ければ焼き込みの地球
+uint16_t *faceOverride[NUM_FACES];
+#define faceImage(f) (faceOverride[f] ? (const uint16_t *)faceOverride[f] : EARTH_QSC480X6[f])
 
 static const int PIN_RESET  = D1;
 static const int PIN_BL     = D3;
@@ -456,6 +459,37 @@ void fullWindow() {
 void drawFace(const uint16_t *face) {
   uint32_t t0 = millis();
   if (drawRegion(face, 0, 0, 480, 480)) Serial.printf("board %d: face written in %lu ms\n", curBoard, (unsigned long)(millis() - t0));
+}
+
+// ---- 面の画像を受け取る (#U<面>) ----
+// 母艦の host/clouds.py が作る face<k>.bin (480x480、RGB565 リトルエンディアン、面の画像の並び) を host/send_faces.py が送る。
+// 4096 バイトずつ受け、受けるたびに "k" を返す (返事を待たずに流すと受信バッファが溢れる)。PSRAM に置き、
+// 以後その面は焼き込みの地球の代わりにこれを使う (#D、#G も)。その面を映している基板は描き直す。#u で焼き込みに戻す
+void receiveFace(int f) {
+  const uint32_t total = 480u * 480u * 2u, chunk = 4096;
+  if (f < 0 || f >= NUM_FACES) { Serial.println("U error: face must be 0-5"); return; }
+  if (!faceOverride[f]) faceOverride[f] = (uint16_t *)ps_malloc(total);
+  if (!faceOverride[f]) { Serial.println("U error: no PSRAM"); return; }
+  uint8_t *dst = (uint8_t *)faceOverride[f];
+  while (Serial.available()) Serial.read();  // 命令の後ろの改行など
+  Serial.println("U ready");
+  uint32_t got = 0, t0 = millis();
+  while (got < total) {
+    uint32_t want = min(chunk, total - got), n = 0, last = millis();
+    while (n < want) {
+      int a = Serial.available();
+      if (a > 0) { n += Serial.readBytes(dst + got + n, min((uint32_t)a, want - n)); last = millis(); }
+      else if (millis() - last > 3000) { Serial.printf("U error: timeout at %lu\n", (unsigned long)(got + n)); free(faceOverride[f]); faceOverride[f] = nullptr; return; }
+    }
+    got += n;
+    Serial.print("k");
+  }
+  Serial.printf("\nU received face %d in %lu ms\n", f, (unsigned long)(millis() - t0));
+  int keep = curBoard;
+  for (int b = 0; b < NUM_BOARDS; b++)
+    if (faceOf[b] == f) { curBoard = b; drawToPage(0); showPage(0); drawFace(boardFace(b)); }
+  curBoard = keep;
+  Serial.printf("U done %d\n", f);
 }
 
 // ---- 表示用メモリの中の複数の画面 (ダブルバッファ用) ----
@@ -1059,6 +1093,7 @@ void setup() {
   digitalWrite(PIN_PANEL_SDA, LOW);
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, LOW);
+  Serial.setRxBufferSize(8192);  // #U で 4096 バイトずつ受ける
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
   Serial.setTimeout(200);
@@ -1244,6 +1279,14 @@ void loop() {
       bool vsync = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt() != 0) : true;
       long mhz = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 10;
       demoDouble(sec > 0 ? sec : 30, labels, constrain(planes, 0, 200), vsync, constrain(mhz, 1, 10) * 1000000);  // 20MHz では状態の読みが化けた
+      break;
+    }
+    case 'U': receiveFace(Serial.parseInt()); break;  // #U<面> 面の画像を受け取る
+    case 'u': {  // 送られてきた面の画像を捨てて、焼き込みの地球に戻す
+      for (int f = 0; f < NUM_FACES; f++) { free(faceOverride[f]); faceOverride[f] = nullptr; }
+      for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; drawToPage(0); showPage(0); drawFace(boardFace(b)); }
+      curBoard = 0;
+      Serial.println("cmd u: built-in faces");
       break;
     }
     case 'B': pageSelfTest(); break;  // ページの切り替えと LT7680 の中でのコピーを確かめる (選んだ基板)

@@ -8,15 +8,15 @@ ER-PCBA5981-1 (LT7680A-R) + ER-TFT040-3 (ST7701S) を 1 台の XIAO ESP32-S3 か
 
 ```sh
 # 構成 1: XIAO ESP32-S3 直結で 1 枚
-arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3 --output-dir build/direct \
+arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi --output-dir build/direct \
   --build-property "compiler.cpp.extra_flags=-DBOARD_SELECT_DIRECT=1" lt7680_multi
 
 # 構成 2: XIAO ESP32-S3 + 74HC138 で 2 枚
-arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3 --output-dir build/hc138x2 \
+arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi --output-dir build/hc138x2 \
   --build-property "compiler.cpp.extra_flags=-DNUM_BOARDS=2" lt7680_multi
 
 # 構成 3: XIAO ESP32-S3 + 74HC138 で 3 枚
-arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3 --output-dir build/hc138x3 \
+arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi --output-dir build/hc138x3 \
   --build-property "compiler.cpp.extra_flags=-DNUM_BOARDS=3" lt7680_multi
 
 # 書き込み (別のファームが載っていた XIAO には、起動ローダーごと merged.bin を 0x0 に)
@@ -85,6 +85,21 @@ uv run -q --no-project --with pillow --with pyproj python -I make_qsc_faces.py b
 ```
 
 6 面でファームは約 3.07MB (app 領域の 91%)。
+
+## 今日の雲 (`host/clouds.py`、`host/send_faces.py`、`#U`)
+
+```sh
+# 母艦: NASA GIBS の昨日の実色 (VIIRS NOAA-20) を取り、6 面に切り出す (~/tmp/cubic-clouds/face0-5.bin と faces.png)
+cd lt7680_multi/host
+uv run -q --no-project --with numpy --with pillow --with pyproj python -I clouds.py
+scp send_faces.py ~/tmp/cubic-clouds/face*.bin pi5-deck:tmp/cubic-clouds/
+# pi5-deck: XIAO に送る
+ssh pi5-deck "~/.venv-esptool/bin/python tmp/cubic-clouds/send_faces.py $PORT tmp/cubic-clouds"
+```
+
+- GIBS は登録なしで全球 4096x2048 を 1 回で取れる。昼の側だけを並べた 1 日 1 枚の合成で、極夜 (10 月は北緯約 70 度より北) と南緯約 84 度より南は真っ黒 (データ無し)
+- その黒い所は、SSEC RealEarth の 1 時間ごとの全球赤外合成 (`globalir`、表記「Source: SSEC RealEarth, UW-Madison」が要る) の雲を、雲の無い Blue Marble に白く重ねて埋める。RealEarth の `/api/image` は Web メルカトル (GeoTIFF で確認) で、85 度まで、透かしなしは幅 1024 画素まで (1280 で「Size limit exceeded」の透かし)。85 度より先は 85 度の輪の平均の色。極夜では凍った海も冷たく、雲と同じく白く写る
+- `#U<面>` は面の画像を 4096 バイトずつ受けて PSRAM に置き (ビルドに `PSRAM=opi` が要る)、以後その面は焼き込みの地球の代わりに使う。1 面約 2〜2.6 秒。`#u` で焼き込みに戻す
 
 ## 起動
 
