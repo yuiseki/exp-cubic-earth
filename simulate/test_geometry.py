@@ -63,3 +63,17 @@ def test_four_plans_turn_one_face_round_the_corner_and_two_keep_the_ffcs_inside(
     assert len(rows) == 4
     inside = {r["plan"]: r["turning"] for r in rows if r["inside"]}
     assert inside == {"top=-y,A=+x,B=+z": "clockwise", "top=-x,A=-z,B=+y": "counterclockwise"}
+
+
+def test_fpc_edges_meet_on_three_cube_edges_in_the_chosen_plan():
+    # top=-x,A=-z,B=+y: every panel's FPC edge lies on the same cube edge as
+    # its partner's in the other module, so the two bottom borders face each other
+    plan = g.Plan({"top": "-x", "A": "-z", "B": "+y"})
+    assert sorted(tuple(sorted(m)) for m in g.fpc_edge_meetings(plan)) == [("A", "bottom"), ("B", "D"), ("C", "top")]
+
+
+def test_every_plan_gives_each_face_one_fpc_edge_on_the_cube():
+    for r in g.search():
+        edges = g.fpc_edges(g.Plan(dict(kv.split("=") for kv in r["plan"].split(","))))
+        assert len(edges) == 6 and all(len(e) == 2 for e in edges.values())
+        assert r["meetings"] == len(g.fpc_edge_meetings(g.Plan(dict(kv.split("=") for kv in r["plan"].split(",")))))

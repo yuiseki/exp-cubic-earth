@@ -161,6 +161,20 @@ def ffc_destinations(plan):
     return {f.name: by_normal[axis_name(f.ffc_direction)] for f in plan.faces if f.module == 1}
 
 
+def fpc_edges(plan):
+    """For each face, the cube edge its FPC edge lies on, as the pair of the
+    two faces' outward normals (axis names) that meet there."""
+    return {f.name: frozenset((axis_name(f.normal), axis_name(f.fpc))) for f in plan.faces}
+
+
+def fpc_edge_meetings(plan):
+    """Pairs of faces whose FPC edges lie on the same cube edge. The FPC edge
+    has the panel's 2.81mm bottom border (and the folded FPC), so two of them
+    side by side on one cube edge make the widest seam."""
+    edges = list(fpc_edges(plan).items())
+    return [(a, b) for i, (a, ea) in enumerate(edges) for b, eb in edges[i + 1:] if ea == eb]
+
+
 CORNER = np.array([1.0, -1.0, 1.0]) / np.sqrt(3)  # the first module's corner
 
 
@@ -198,6 +212,7 @@ def search():
             "dest": dest,
             "inside": set(dest.values()) <= set(FIRST),
             "turning": turning(plan),
+            "meetings": len(fpc_edge_meetings(plan)),
             "edge": minimum_edge(plan),
         })
     return rows
