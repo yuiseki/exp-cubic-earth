@@ -14,3 +14,16 @@ struct Mover {
   int lq;         // ラベルの向き: 文字の下が 0 下、1 右、2 上、3 左 (その場所の南の向き)
   int bx, by, bw, bh;  // 印とラベルを囲む四角
 };
+
+// #G (ダブルバッファ版) の 1 機。描く絵 (スプライト) は起動時に表示用メモリへ描いておき、毎コマそこから写す
+struct GMover {
+  float p[3], d[3];
+  float speed;
+  int size;
+  bool ship;
+  char label[8];
+  int rx[2], ry[2], rw[2], rh[2], rb[2];  // ページ 0、1 に描いた四角と基板 (rb = -1 なら描いていない)
+};
+
+// #G のスプライトの形: 向き q ごとの大きさ、ブロックの中の置き場所、印の左上、ラベルの左上 (スプライトの中の座標)
+struct SpriteGeom { int w, h, ox, oy, mx, my, lx, ly; };

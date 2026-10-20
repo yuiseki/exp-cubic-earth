@@ -30,6 +30,7 @@
 int faceOf[NUM_BOARDS];
 // 基板ごとの回転 (時計回りに 90 度 x r、パネルを表から見て)。x,n,r 命令で変えて "r<b>" に保存する
 int rotOf[NUM_BOARDS];
+QscFaces qsc;  // 地球の面への投影 (setup で初期化)
 bool windowFull = true;  // 作業ウィンドウが全面か。drawRegion は狭めたままにし、fillRect の前に戻す
 Preferences prefs;
 // (関数にすると Arduino の自動プロトタイプがここに入り、後ろの enum より前に来てビルドが壊れる)
@@ -92,6 +93,26 @@ uint8_t xfer16(uint8_t prefix, uint8_t data) {
 void writeReg(uint8_t reg, uint8_t val) {
   xfer16(0x00, reg);
   xfer16(0x80, val);
+}
+
+// 前に書いた値と同じなら書かない writeReg (BTE の位置や大きさのように、毎回少しだけ変わるレジスタ用)。
+// 基板ごとに覚える。regCacheClear() で忘れる (初期化し直したあとなど)
+int16_t regCache[NUM_BOARDS][256];
+void regCacheClear() {
+  for (int b = 0; b < NUM_BOARDS; b++)
+    for (int r = 0; r < 256; r++) regCache[b][r] = -1;
+}
+void writeRegC(uint8_t reg, uint8_t val) {
+  if (regCache[curBoard][reg] == val) return;
+  writeReg(reg, val);
+  regCache[curBoard][reg] = val;
+}
+void writeReg16C(uint8_t reg, uint16_t v) {
+  writeRegC(reg, v & 0xFF);
+  writeRegC(reg + 1, v >> 8);
+}
+void writeReg32C(uint8_t reg, uint32_t v) {
+  for (int i = 0; i < 4; i++) writeRegC(reg + i, (v >> (8 * i)) & 0xFF);
 }
 
 uint8_t readReg(uint8_t reg) {
@@ -429,6 +450,23 @@ uint32_t pageAddr(int page) { return PAGE_BYTES * page; }
 // 主画面 (パネルに映す) の開始アドレス。REG[23h] を書いた時点で反映される
 void showPage(int page) { writeReg32(0x20, pageAddr(page)); }
 
+// 表示の開始アドレスは、書いた瞬間ではなく次の垂直同期でパネルに効く (と考えると #G のちらつきが説明できた)。
+// 切り替えた直後に垂直同期の旗 (REG[0Ch] bit4、REG[0Bh] bit4 で有効) を消しておき、古いページに触る前に旗が立つのを待つ。
+// 待たずに古いページで印を消すと、まだ映っているページから印が消えて、ちらつく
+void vsyncArm() {
+  writeReg(0x0B, readReg(0x0B) | 0x10);
+  writeReg(0x0C, 0x10);
+}
+
+void vsyncWait() {
+  uint32_t t0 = millis();
+  while (!(readStatusOrFlag() & 0x10)) {
+    if (millis() - t0 > 50) { Serial.printf("TIMEOUT waiting for VSYNC (board %d)\n", curBoard); return; }
+  }
+}
+
+uint8_t readStatusOrFlag() { return readReg(0x0C); }
+
 // キャンバス (画素の書き込みと図形の描画の行き先) の開始アドレス
 void drawToPage(int page) { writeReg32(0x50, pageAddr(page)); }
 
@@ -480,11 +518,232 @@ void pageSelfTest() {
   drawToPage(0);
 }
 
+// ---- #G: ダブルバッファで飛行機と船を動かす ----
+// ページ 0 と 1 を表と裏、ページ 2 を地球の画像にし、ページ 3 から先にスプライト (印とラベルの絵) を並べる。
+// 毎コマ、裏のページで「2 コマ前に描いた四角を地球の画像から写して消す」→「新しい場所へスプライトを透明色付きで写す」をして、
+// 全部済んでから表示を裏のページに切り替える。途中の状態は画面に出ないので、消す順番を気にしなくてよい
+static const uint16_t KEY = 0xF81F;  // 透明色 (マゼンタ)
+static const int SHEET_PAGE = 3, BLOCK_W = 80, BLOCK_H = 48, BLOCKS_PER_ROW = 480 / BLOCK_W;
+
+// BTE で、ページ sp の (sx, sy) から w x h をページ dp の (dx, dy) へ写す。key なら透明色の画素は写さない。
+// 行き先が画面からはみ出す分は切る
+void bteBlit(int sp, int sx, int sy, int dp, int dx, int dy, int w, int h, bool key) {
+  if (dx < 0) { sx -= dx; w += dx; dx = 0; }
+  if (dy < 0) { sy -= dy; h += dy; dy = 0; }
+  if (dx + w > 480) w = 480 - dx;
+  if (dy + h > 480) h = 480 - dy;
+  if (w <= 0 || h <= 0) return;
+  writeReg32C(0x93, pageAddr(sp));
+  writeReg16C(0x97, 480);
+  writeReg16C(0x99, sx);
+  writeReg16C(0x9B, sy);
+  writeReg32C(0xA7, pageAddr(dp));
+  writeReg16C(0xAB, 480);
+  writeReg16C(0xAD, dx);
+  writeReg16C(0xAF, dy);
+  writeReg16C(0xB1, w);
+  writeReg16C(0xB3, h);
+  writeRegC(0x92, 0x25);
+  writeRegC(0x91, key ? 0xC5 : 0xC2);  // Memory Copy with chroma key / with ROP (S0)
+  writeReg(0x90, 0x10);
+  waitBte();
+}
+
+SpriteGeom spriteGeom(const GMover &m, int q) {
+  int s = m.size, W = strlen(m.label) * 5, g = W ? 2 : 0;
+  SpriteGeom r;
+  if (!(q & 1)) {
+    r.w = s + g + W; r.h = max(s, 7);
+    r.ox = 0; r.oy = q == 0 ? 0 : 16;
+    r.my = (r.h - s) / 2; r.ly = (r.h - 7) / 2;
+    if (q == 0) { r.mx = 0; r.lx = s + g; } else { r.mx = W + g; r.lx = 0; }
+  } else {
+    r.w = max(s, 7); r.h = s + g + W;
+    r.ox = q == 1 ? 48 : 64; r.oy = 0;
+    r.mx = (r.w - s) / 2; r.lx = (r.w - 7) / 2;
+    if (q == 1) { r.my = W + g; r.ly = 0; } else { r.my = 0; r.ly = s + g; }
+  }
+  return r;
+}
+
+// スプライトの (x, y) の色 (透明なら KEY)
+uint16_t spritePixel(const GMover &m, int q, const SpriteGeom &g, int x, int y) {
+  uint16_t col = m.ship ? 0xFFFF : 0xFFE0;
+  int s = m.size, c = s / 2, dx = x - g.mx, dy = y - g.my;
+  if (dx >= 0 && dy >= 0 && dx < s && dy < s && (m.ship || abs(dx - c) <= 1 || abs(dy - c) <= 1)) return col;
+  int W = strlen(m.label) * 5, u = x - g.lx, v = y - g.ly, tx, ty;
+  if (!W || u < 0 || v < 0 || u >= ((q & 1) ? 7 : W) || v >= ((q & 1) ? W : 7)) return KEY;
+  switch (q) {
+    case 1: tx = W - 1 - v; ty = u; break;
+    case 2: tx = W - 1 - u; ty = 6 - v; break;
+    case 3: tx = v; ty = 6 - u; break;
+    default: tx = u; ty = v; break;
+  }
+  char ch = m.label[tx / 5];
+  if (ch < 32 || ch > 95) return KEY;
+  return (FONT5X7[ch - 32][ty] >> (4 - tx % 5)) & 1 ? col : KEY;
+}
+
+// 選んだ基板のキャンバス (今のページ) の (x0, y0) から w x h に、px(x, y) の色を書く。y は 480 を超えてよい (ページをまたぐ)
+template <typename F> void streamPixels(int x0, int y0, int w, int h, F px) {
+  writeReg16(0x56, x0);
+  writeReg16(0x58, y0);
+  writeReg16(0x5A, w);
+  writeReg16(0x5C, h);
+  writeReg16(0x5F, x0);
+  writeReg16(0x61, y0);
+  windowFull = false;
+  xfer16(0x00, 0x04);
+  SPISettings fast(pixelHz, MSBFIRST, SPI_MODE3);
+  uint8_t buf[64];
+  int n = 0;
+  uint32_t count = (uint32_t)w * h;
+  for (uint32_t i = 0; i < count; i++) {
+    uint16_t c = px(i % w, i / w);
+    buf[n++] = c & 0xFF;
+    buf[n++] = c >> 8;
+    if (n == sizeof(buf) || i == count - 1) {
+      uint32_t w0 = millis();
+      while (readStatus() & 0x80) {
+        if (millis() - w0 > 100) { Serial.printf("TIMEOUT waiting for write FIFO (board %d)\n", curBoard); return; }
+      }
+      SPI.beginTransaction(fast);
+      selectLine(SEL_LT);
+      SPI.transfer(0x80);
+      SPI.writeBytes(buf, n);
+      selectLine(SEL_NONE);
+      SPI.endTransaction();
+      n = 0;
+    }
+  }
+}
+
+void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync) {
+  const int PLANES = planesPerBoard * NUM_BOARDS, SHIPS = 4 * NUM_BOARDS, N = PLANES + SHIPS;
+  GMover *m = (GMover *)calloc(N, sizeof(GMover));
+  if (!m) { Serial.println("cmd G: out of memory"); return; }
+  randomSeed(esp_random());
+  for (int k = 0; k < N; k++) {
+    GMover &o = m[k];
+    o.ship = k >= PLANES;
+    o.size = o.ship ? 5 : 11;
+    o.speed = o.ship ? 0.0005f : random(25, 60) / 10000.0f;
+    if (!labels) o.label[0] = 0;
+    else if (o.ship) snprintf(o.label, sizeof(o.label), "MARU-%d", k - PLANES + 1);
+    else snprintf(o.label, sizeof(o.label), "%s%03d", (k % 2) ? "JL" : "NH", (int)random(100, 999));
+    for (int t = 0; t < 500; t++) {
+      randomPoint(o.p);
+      int b, px, py, f, fx, fy;
+      locate(o.p, o.size, &b, &px, &py, &f, &fx, &fy);
+      if (b >= 0 && (!o.ship || isSeaPixel(f, fx, fy))) break;
+    }
+    float tmp[3];
+    memcpy(tmp, o.p, sizeof(tmp));
+    Mover h;  // randomHeading は Mover を受けるので、向きだけ借りる
+    memcpy(h.p, o.p, sizeof(h.p));
+    randomHeading(h);
+    memcpy(o.d, h.d, sizeof(o.d));
+    for (int pg = 0; pg < 2; pg++) o.rb[pg] = -1;
+  }
+  int keep = curBoard;
+  uint32_t s0 = millis();
+  regCacheClear();
+  for (int b = 0; b < NUM_BOARDS; b++) {  // 地球の画像をページ 2 に、表と裏に写す。スプライトを描く
+    curBoard = b;
+    drawToPage(2);
+    drawRegion(boardFace(b), 0, 0, 480, 480);
+    bteCopy(2, 0, 0, 0, 0, 0, 480, 480);
+    bteCopy(2, 0, 0, 1, 0, 0, 480, 480);
+    regCacheClear();
+    drawToPage(SHEET_PAGE);
+    for (int k = 0; k < N; k++) {
+      int bx = (k % BLOCKS_PER_ROW) * BLOCK_W, by = (k / BLOCKS_PER_ROW) * BLOCK_H;
+      for (int q = 0; q < 4; q++) {
+        SpriteGeom g = spriteGeom(m[k], q);
+        streamPixels(bx + g.ox, by + g.oy, g.w, g.h, [&](int x, int y) { return spritePixel(m[k], q, g, x, y); });
+        if (!labels) break;  // ラベルが無ければ向きは要らない
+      }
+    }
+    showPage(0);
+    drawToPage(0);
+  }
+  for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; writeRegC(0xD5, 0xF8); writeRegC(0xD6, 0x00); writeRegC(0xD7, 0xF8); }  // 透明色
+  Serial.printf("cmd G: setup %lu ms (%d movers)\n", (unsigned long)(millis() - s0), N);
+
+  int front = 0;
+  uint32_t t0 = millis(), frames = 0, busy = 0, worst = 0;
+  while (millis() - t0 < (uint32_t)seconds * 1000) {
+    uint32_t f0 = micros();
+    int back = 1 - front;
+    for (int i = 0; i < N; i++) {  // 進める
+      GMover &o = m[i];
+      float c = cosf(o.speed), s = sinf(o.speed), np[3], nd[3];
+      for (int j = 0; j < 3; j++) { np[j] = o.p[j] * c + o.d[j] * s; nd[j] = o.d[j] * c - o.p[j] * s; }
+      if (o.ship) {
+        float x, y;
+        int f = qscProject(qsc, np, &x, &y);
+        if (!isSeaPixel(f, (int)x, (int)y)) {
+          Mover h;
+          memcpy(h.p, o.p, sizeof(h.p));
+          randomHeading(h);
+          memcpy(o.d, h.d, sizeof(o.d));
+          continue;
+        }
+      }
+      memcpy(o.p, np, sizeof(np));
+      memcpy(o.d, nd, sizeof(nd));
+    }
+    if (vsync && frames > 0)  // 前のコマの切り替えが効いて、裏のページがもう映っていないことを確かめる
+      for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; vsyncWait(); }
+    for (int i = 0; i < N; i++) {  // 裏のページで、2 コマ前の四角を消す
+      GMover &o = m[i];
+      if (o.rb[back] < 0) continue;
+      curBoard = o.rb[back];
+      bteBlit(2, o.rx[back], o.ry[back], back, o.rx[back], o.ry[back], o.rw[back], o.rh[back], false);
+      o.rb[back] = -1;
+    }
+    for (int i = 0; i < N; i++) {  // 裏のページに描く
+      GMover &o = m[i];
+      int b, cx, cy, f, fx, fy;
+      locate(o.p, o.size, &b, &cx, &cy, &f, &fx, &fy);
+      if (b < 0) continue;
+      int q = labels ? southOnPanel(o.p, b) : 0;
+      SpriteGeom g = spriteGeom(o, q);
+      int k = i, sx = (k % BLOCKS_PER_ROW) * BLOCK_W + g.ox, sy = (k / BLOCKS_PER_ROW) * BLOCK_H + g.oy;
+      int dx = cx - o.size / 2 - g.mx, dy = cy - o.size / 2 - g.my;
+      curBoard = b;
+      bteBlit(SHEET_PAGE, sx, sy, back, dx, dy, g.w, g.h, true);
+      o.rx[back] = max(dx, 0);
+      o.ry[back] = max(dy, 0);
+      o.rw[back] = min(dx + g.w, 480) - o.rx[back];
+      o.rh[back] = min(dy + g.h, 480) - o.ry[back];
+      o.rb[back] = (o.rw[back] > 0 && o.rh[back] > 0) ? b : -1;
+    }
+    for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; showPage(back); if (vsync) vsyncArm(); }
+    front = back;
+    frames++;
+    uint32_t spent = micros() - f0;
+    busy += spent;
+    worst = max(worst, spent);
+    if (spent < 33000) delay((33000 - spent) / 1000);
+  }
+  for (int b = 0; b < NUM_BOARDS; b++) {  // 片付け: 地球だけのページ 2 を表示に写して、ページ 0 に戻す
+    curBoard = b;
+    bteCopy(2, 0, 0, 0, 0, 0, 480, 480);
+    showPage(0);
+    drawToPage(0);
+  }
+  regCacheClear();
+  curBoard = keep;
+  free(m);
+  Serial.printf("cmd G: %s, %d movers%s, %lu frames in %d s, work %.1f ms/frame (worst %.1f), %.0f fps if not held to 30\n", vsync ? "vsync" : "no vsync", N,
+                labels ? " with labels" : "", (unsigned long)frames, seconds, busy / 1000.0 / frames, worst / 1000.0, frames * 1e6 / busy);
+}
+
 // 架空の飛行機と船を動かす (#D<秒>)。位置は経度・緯度 (単位ベクトル) で持ち、大円に沿って進める。
 // 毎コマ QSC 投影で面と画素に直し、その面を映している基板に、基板の回転を付けて描くので、面の境目をそのまままたぐ。
 // 飛行機は黄色い十字、船は白い点で、船は進む先が陸 (面の画像で海の色でない画素) なら向きを変える。
 // 1 機ごとに、前の場所と新しい場所を囲む四角を、面の画像に印を重ねて 1 回で書く (消してから描くとちらつく)
-QscFaces qsc;
 
 bool isSeaPixel(int face, int x, int y) {
   uint16_t c = EARTH_QSC480X6[face][constrain(y, 0, 479) * 480 + constrain(x, 0, 479)];
@@ -937,6 +1196,14 @@ void loop() {
       bool labels = Serial.peek() == ',' && (Serial.read(), Serial.parseInt() == 1);
       long planes = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 5;
       demoMovers(sec > 0 ? sec : 30, labels, constrain(planes, 0, 200));
+      break;
+    }
+    case 'G': {  // #G<秒>[,<ラベル 0/1>[,<基板あたりの飛行機>[,<垂直同期を待つ 0/1、既定 1>]]] #D のダブルバッファ版
+      long sec = Serial.parseInt();
+      bool labels = Serial.peek() == ',' && (Serial.read(), Serial.parseInt() == 1);
+      long planes = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 5;
+      bool vsync = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt() != 0) : true;
+      demoDouble(sec > 0 ? sec : 30, labels, constrain(planes, 0, 200), vsync);
       break;
     }
     case 'B': pageSelfTest(); break;  // ページの切り替えと LT7680 の中でのコピーを確かめる (選んだ基板)
