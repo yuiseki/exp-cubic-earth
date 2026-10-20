@@ -353,7 +353,13 @@ void drawFace(const uint16_t *face) {
     buf[n++] = c & 0xFF;
     buf[n++] = c >> 8;
     if (n == sizeof(buf)) {
+      // つないでいない基板では MISO が浮き、この状態の読みが 1 のままになりうる。待ち切りにしない
+      uint32_t w0 = millis();
       while (readStatus() & 0x80) {
+        if (millis() - w0 > 100) {
+          Serial.printf("TIMEOUT waiting for write FIFO (board %d)\n", curBoard);
+          return;
+        }
       }
       SPI.beginTransaction(fast);
       selectLine(SEL_LT);
@@ -447,6 +453,7 @@ void setup() {
   for (int b = 0; b < NUM_BOARDS; b++) {
     curBoard = b;
     ok[b] = initLt7680NoReset();
+    if (!ok[b]) continue;  // つないでいない基板は飛ばす (残りの基板とバックライトを止めない)
     initPanel();
     writeReg(0x12, readReg(0x12) | 0x40);  // 表示オン
     setupMemory();
