@@ -13,6 +13,7 @@
 
 #include "earth_qsc480x6.h"
 #include "rotate.h"
+#include "mover.h"  // (構造体は .ino に書くと Arduino の自動プロトタイプより後ろになる)
 #include <Preferences.h>
 #include <SPI.h>
 
@@ -345,7 +346,11 @@ uint32_t pixelHz = PIXEL_SPI_HZ;  // 命令 #S<MHz> で変えられる
 
 // 選んだ基板の表示用メモリの (x0, y0) から w x h の四角形に、face の同じ場所 (基板の回転込み) を書く。
 // 64 バイトのバーストで、バーストごとに書き込み FIFO の空きを待つ。書けたら true
-bool drawRegion(const uint16_t *face, int x0, int y0, int w, int h) {
+bool drawRegion(const uint16_t *face, int x0, int y0, int w, int h) { return drawRegionOver(face, x0, y0, w, h, nullptr, 0); }
+
+// drawRegion と同じだが、ms[0..nm) のうち選んだ基板にある印を、面の画像に重ねて一緒に書く。
+// 消すと描くが 1 回の書き込みになるので、途中の (印が消えた) 状態が画面に出ない
+bool drawRegionOver(const uint16_t *face, int x0, int y0, int w, int h, const Mover *ms, int nm) {
   writeReg16(0x56, x0);
   writeReg16(0x58, y0);
   writeReg16(0x5A, w);
@@ -359,7 +364,12 @@ bool drawRegion(const uint16_t *face, int x0, int y0, int w, int h) {
   int rot = rotOf[curBoard];
   uint32_t count = (uint32_t)w * h;
   for (uint32_t i = 0; i < count; i++) {
-    uint16_t c = face[rotatedIndex(x0 + i % w, y0 + i / w, rot)];
+    int x = x0 + i % w, y = y0 + i / w;
+    uint16_t c = face[rotatedIndex(x, y, rot)];
+    for (int j = 0; j < nm; j++) {
+      int mc = ms[j].board == curBoard ? moverColorAt(ms[j], x, y) : -1;
+      if (mc >= 0) c = mc;
+    }
     buf[n++] = c & 0xFF;
     buf[n++] = c >> 8;
     if (n == sizeof(buf) || i == count - 1) {
@@ -393,6 +403,96 @@ bool drawRegion(const uint16_t *face, int x0, int y0, int w, int h) {
 void drawFace(const uint16_t *face) {
   uint32_t t0 = millis();
   if (drawRegion(face, 0, 0, 480, 480)) Serial.printf("board %d: face written in %lu ms\n", curBoard, (unsigned long)(millis() - t0));
+}
+
+// 架空の飛行機と船を動かす (#D<秒>)。飛行機は黄色い十字で、面を横切って反対の辺から戻る。
+// 船は白い点でゆっくり進み、行き先が陸 (面の画像で海の色でない画素) なら向きを変える。
+// 1 コマで、まず全部の前の場所を面の画像で描き直し、それから全部を新しい場所に描く (重なっても消し合わない)
+
+bool isSea(const uint16_t *face, int board, int x, int y) {
+  uint16_t c = face[rotatedIndex(x, y, rotOf[board])];
+  int r = c >> 11, g = (c >> 5) & 63, b = c & 31;
+  return r < 6 && g < 12 && b >= 6;  // Blue Marble の海は暗い紺
+}
+
+// 印が (x, y) を覆っていればその色、覆っていなければ -1。船は白い四角、飛行機は黄色い十字 (胴体と翼、太さ 3)
+int moverColorAt(const Mover &m, int x, int y) {
+  int dx = x - m.px, dy = y - m.py, s = m.size, c = s / 2;
+  if (m.px < 0 || dx < 0 || dy < 0 || dx >= s || dy >= s) return -1;
+  if (m.ship) return 0xFFFF;
+  return (abs(dx - c) <= 1 || abs(dy - c) <= 1) ? 0xFFE0 : -1;
+}
+
+void demoMovers(int seconds) {
+  const int PER_BOARD_PLANES = 5, PER_BOARD_SHIPS = 4;
+  const int N = NUM_BOARDS * (PER_BOARD_PLANES + PER_BOARD_SHIPS);
+  Mover m[N];
+  int k = 0;
+  randomSeed(esp_random());
+  for (int b = 0; b < NUM_BOARDS; b++) {
+    for (int i = 0; i < PER_BOARD_PLANES; i++, k++) {
+      float a = random(0, 6283) / 1000.0f, v = random(60, 140) / 100.0f;  // 画素/コマ
+      m[k] = {b, (float)random(20, 460), (float)random(20, 460), v * cosf(a), v * sinf(a), 11, false, -1, -1};
+    }
+    const uint16_t *face = EARTH_QSC480X6[faceOf[b]];
+    for (int i = 0; i < PER_BOARD_SHIPS; i++, k++) {
+      int x = 240, y = 240;
+      for (int t = 0; t < 200; t++) {  // 海の上から始める
+        x = random(10, 470);
+        y = random(10, 470);
+        if (isSea(face, b, x, y)) break;
+      }
+      float a = random(0, 6283) / 1000.0f;
+      m[k] = {b, (float)x, (float)y, 0.15f * cosf(a), 0.15f * sinf(a), 5, true, -1, -1};
+    }
+  }
+  int keep = curBoard;
+  uint32_t t0 = millis(), frames = 0;
+  while (millis() - t0 < (uint32_t)seconds * 1000) {
+    uint32_t f0 = millis();
+    for (int i = 0; i < N; i++) {  // 進めて、前の場所と新しい場所を囲む四角を 1 回で書く
+      Mover &o = m[i];
+      const uint16_t *face = EARTH_QSC480X6[faceOf[o.board]];
+      float nx = o.x + o.vx, ny = o.y + o.vy;
+      if (o.ship) {
+        if (nx < 4 || nx > 475 || ny < 4 || ny > 475 || !isSea(face, o.board, (int)nx, (int)ny)) {
+          float a = random(0, 6283) / 1000.0f;  // 陸か端に当たったら向きを変えて、このコマは止まる
+          o.vx = 0.15f * cosf(a);
+          o.vy = 0.15f * sinf(a);
+          nx = o.x;
+          ny = o.y;
+        }
+      } else {
+        if (nx < 0) nx += 480 - o.size;
+        if (nx > 480 - o.size) nx -= 480 - o.size;
+        if (ny < 0) ny += 480 - o.size;
+        if (ny > 480 - o.size) ny -= 480 - o.size;
+      }
+      o.x = nx;
+      o.y = ny;
+      int ox = o.px, oy = o.py;
+      o.px = constrain((int)o.x - o.size / 2, 0, 480 - o.size);
+      o.py = constrain((int)o.y - o.size / 2, 0, 480 - o.size);
+      if (ox == o.px && oy == o.py) continue;  // 画素が変わらなければ書かない
+      curBoard = o.board;
+      if (ox < 0 || abs(ox - o.px) > o.size || abs(oy - o.py) > o.size) {  // 初回か、端から反対へ飛んだ: 別々に書く
+        if (ox >= 0) drawRegionOver(face, ox, oy, o.size, o.size, m, N);
+        drawRegionOver(face, o.px, o.py, o.size, o.size, m, N);
+      } else {
+        int x0 = min(ox, o.px), y0 = min(oy, o.py);
+        drawRegionOver(face, x0, y0, max(ox, o.px) + o.size - x0, max(oy, o.py) + o.size - y0, m, N);
+      }
+    }
+    frames++;
+    uint32_t spent = millis() - f0;
+    if (spent < 33) delay(33 - spent);  // 30 コマ/秒に揃える
+  }
+  for (int i = 0; i < N; i++) {  // 片付け
+    curBoard = m[i].board;
+    drawRegion(EARTH_QSC480X6[faceOf[curBoard]], m[i].px, m[i].py, m[i].size, m[i].size);
+  }
+  curBoard = keep;
+  Serial.printf("cmd D: %d movers, %lu frames in %d s\n", N, (unsigned long)frames, seconds);
 }
 
 // 印を動かす速さを測る: 1 コマごとに、前の印の場所を face で描き直し、新しい場所に s x s の赤い四角を塗る。
@@ -647,6 +747,11 @@ void loop() {
       } else {
         Serial.printf("cmd Q: bad line '%s'\n", line.c_str());
       }
+      break;
+    }
+    case 'D': {  // #D<秒> 架空の飛行機と船を動かす (既定 30 秒)
+      long sec = Serial.parseInt();
+      demoMovers(sec > 0 ? sec : 30);
       break;
     }
     case 'T': {  // #T<コマ数>,<大きさ> 印を動かす速さを測る (既定 200 コマ、12 画素)
