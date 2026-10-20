@@ -343,31 +343,32 @@ void fillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color
 #endif
 uint32_t pixelHz = PIXEL_SPI_HZ;  // 命令 #S<MHz> で変えられる
 
-// 選んだ基板の表示用メモリに face を書く (64 バイトのバースト、480x480 で約 4.1 秒)
-void drawFace(const uint16_t *face) {
-  writeReg16(0x56, 0);
-  writeReg16(0x58, 0);
-  writeReg16(0x5A, 480);
-  writeReg16(0x5C, 480);
-  writeReg16(0x5F, 0);
-  writeReg16(0x61, 0);
+// 選んだ基板の表示用メモリの (x0, y0) から w x h の四角形に、face の同じ場所 (基板の回転込み) を書く。
+// 64 バイトのバーストで、バーストごとに書き込み FIFO の空きを待つ。書けたら true
+bool drawRegion(const uint16_t *face, int x0, int y0, int w, int h) {
+  writeReg16(0x56, x0);
+  writeReg16(0x58, y0);
+  writeReg16(0x5A, w);
+  writeReg16(0x5C, h);
+  writeReg16(0x5F, x0);
+  writeReg16(0x61, y0);
   xfer16(0x00, 0x04);
   SPISettings fast(pixelHz, MSBFIRST, SPI_MODE3);
   uint8_t buf[64];
   int n = 0;
-  uint32_t t0 = millis();
   int rot = rotOf[curBoard];
-  for (uint32_t i = 0; i < 480u * 480u; i++) {
-    uint16_t c = face[rotatedIndex(i % 480u, i / 480u, rot)];
+  uint32_t count = (uint32_t)w * h;
+  for (uint32_t i = 0; i < count; i++) {
+    uint16_t c = face[rotatedIndex(x0 + i % w, y0 + i / w, rot)];
     buf[n++] = c & 0xFF;
     buf[n++] = c >> 8;
-    if (n == sizeof(buf)) {
+    if (n == sizeof(buf) || i == count - 1) {
       // つないでいない基板では MISO が浮き、この状態の読みが 1 のままになりうる。待ち切りにしない
       uint32_t w0 = millis();
       while (readStatus() & 0x80) {
         if (millis() - w0 > 100) {
           Serial.printf("TIMEOUT waiting for write FIFO (board %d)\n", curBoard);
-          return;
+          return false;
         }
       }
       SPI.beginTransaction(fast);
@@ -379,7 +380,41 @@ void drawFace(const uint16_t *face) {
       n = 0;
     }
   }
-  Serial.printf("board %d: face written in %lu ms\n", curBoard, (unsigned long)(millis() - t0));
+  if (w != 480 || h != 480) {  // 図形の描画は作業ウィンドウの中に限られるので、全面に戻す
+    writeReg16(0x56, 0);
+    writeReg16(0x58, 0);
+    writeReg16(0x5A, 480);
+    writeReg16(0x5C, 480);
+  }
+  return true;
+}
+
+// 選んだ基板の表示用メモリに face を書く (480x480 で約 0.6 秒、画素 20MHz)
+void drawFace(const uint16_t *face) {
+  uint32_t t0 = millis();
+  if (drawRegion(face, 0, 0, 480, 480)) Serial.printf("board %d: face written in %lu ms\n", curBoard, (unsigned long)(millis() - t0));
+}
+
+// 印を動かす速さを測る: 1 コマごとに、前の印の場所を face で描き直し、新しい場所に s x s の赤い四角を塗る。
+// 面の真ん中の行を左から右へ 2 画素ずつ、frames コマ動かし、1 コマの平均と fps を報告する
+void benchMarker(int frames, int s) {
+  const uint16_t *face = boardFace(curBoard);
+  int px = -1, y = 240 - s / 2;
+  uint32_t tRestore = 0, tMark = 0, t0 = micros();
+  for (int i = 0; i < frames; i++) {
+    int x = (i * 2) % (480 - s);
+    uint32_t a = micros();
+    if (px >= 0) drawRegion(face, px, y, s, s);
+    uint32_t b = micros();
+    fillRect(x, y, x + s - 1, y + s - 1, 0xF800);
+    tRestore += b - a;
+    tMark += micros() - b;
+    px = x;
+  }
+  uint32_t dt = micros() - t0;
+  drawRegion(face, px, y, s, s);
+  Serial.printf("cmd T: board %d, %d frames of %dx%d in %lu ms: %.2f ms/frame (restore %.2f, mark %.2f), %.1f fps\n", curBoard, frames, s, s,
+                (unsigned long)(dt / 1000), dt / 1000.0 / frames, tRestore / 1000.0 / frames, tMark / 1000.0 / frames, frames * 1e6 / dt);
 }
 
 // 選んだ基板の表示用メモリを全画素読み返し、face と照合する (1MHz、約 20 秒)。
@@ -612,6 +647,14 @@ void loop() {
       } else {
         Serial.printf("cmd Q: bad line '%s'\n", line.c_str());
       }
+      break;
+    }
+    case 'T': {  // #T<コマ数>,<大きさ> 印を動かす速さを測る (既定 200 コマ、12 画素)
+      long n = Serial.parseInt();
+      long sz = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 12;
+      if (n <= 0) n = 200;
+      if (sz < 1 || sz > 64) sz = 12;
+      benchMarker(n, sz);
       break;
     }
     case 'r': Serial.printf("cmd r: board %d STSR=0x%02X CCR=0x%02X DPCR=0x%02X\n", curBoard, readStatus(), readReg(0x01), readReg(0x12)); break;
