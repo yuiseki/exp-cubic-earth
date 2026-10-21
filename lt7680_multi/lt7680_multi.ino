@@ -290,6 +290,10 @@ static const int VBP = 20, VFP = 12, VPW = 3;   // LCD.h の LCD_VBPD/VFPD/VSPW
 #define LT_RAM_READY_TIMEOUT_MS 1000
 #endif
 
+#ifndef SDRAM_E0
+#define SDRAM_E0 0x29  // データシートの LT7680A-R の値 (4 バンク x 4K 行 x 512 列 = 16MB)
+#endif
+
 bool initLt7680NoReset() {
   if (!waitFor("normal operation", 1000, [] { return (readStatus() & 0x02) == 0; })) return false;
 
@@ -305,7 +309,7 @@ bool initLt7680NoReset() {
   if (!waitFor("PLL ready", 1000, [] { return (readReg(0x01) & 0x80) != 0; })) return false;
 
   writeReg(0xE4, 0x04);
-  writeReg(0xE0, 0x29);
+  writeReg(0xE0, SDRAM_E0);
   writeReg(0xE1, 0x03);
   // SDRAM のリフレッシュ間隔。LCD.cpp の SDRAM_initail と同じ (64ms / 8192 行 / (1000/60) - 2 = 486)。
   // 以前の 0x61A (1562) では、書いた画素が数十秒で 1 ビットずつ化けていった
@@ -492,6 +496,91 @@ void receiveFace(int f) {
   Serial.printf("U done %d\n", f);
 }
 
+// 表示用メモリがどこまで別々に使えるかを確かめる (#Z、選んだ基板): 512KB ごとの境目 0〜31 (0〜15.5MB) の先頭の
+// 1 画素に固有の値を順に書き、全部書いてから読み返す。ある番地が手前の番地と同じ場所を指していれば (折り返し)、
+// 先に書いた値が後から書いた値で上書きされて読める。境目どうしで比べるので、折り返しの幅が 512KB の倍数なら必ず見つかる
+void probePages() {
+  const int N = 32;
+  auto at = [](int slot) {
+    writeReg32(0x50, (uint32_t)slot * 0x80000);
+    writeReg16(0x56, 0); writeReg16(0x58, 0); writeReg16(0x5A, 480); writeReg16(0x5C, 480);
+    writeReg16(0x5F, 0); writeReg16(0x61, 0);
+    windowFull = true;
+    xfer16(0x00, 0x04);
+  };
+  for (int p = 0; p < N; p++) {
+    uint16_t v = 0x1000 + p * 37;
+    at(p);
+    xfer16(0x80, v & 0xFF);
+    xfer16(0x80, v >> 8);
+  }
+  int bad = 0;
+  for (int p = 0; p < N; p++) {
+    at(p);
+    xfer16(0xC0, 0x00);  // ダミー
+    uint16_t lo = xfer16(0xC0, 0x00), hi = xfer16(0xC0, 0x00), got = lo | (hi << 8), want = 0x1000 + p * 37;
+    if (got != want) bad++;
+    int from = (int)got - 0x1000;
+    Serial.printf("Z %5.2f MB: got 0x%04X want 0x%04X%s", p * 0.5, got, want, got == want ? "\n" : "");
+    if (got != want) Serial.printf("  <-- overwritten by the write at %.2f MB\n", (from % 37 == 0 && from >= 0) ? from / 37 * 0.5 : -1.0);
+  }
+  drawToPage(0);
+  Serial.printf("Z board %d (E0=0x%02X): %d of %d slots overwritten\n", curBoard, SDRAM_E0, bad, N);
+}
+
+// 表示していないページのデータが時間で化けるかを確かめる (#Y<秒>、選んだ基板): 焼き込みの面をページ 34 に書き、
+// すぐと「秒」後に、先頭の 40 行 (19,200 画素) を読み返して照合する。読み返しそのものも表示用メモリを乱すので、読むのは 40 行だけ
+uint32_t checkRows(const uint16_t *face, int page, int rows) {
+  drawToPage(page);
+  writeReg16(0x56, 0); writeReg16(0x58, 0); writeReg16(0x5A, 480); writeReg16(0x5C, 480);
+  writeReg16(0x5F, 0); writeReg16(0x61, 0);
+  windowFull = true;
+  xfer16(0x00, 0x04);
+  xfer16(0xC0, 0x00);  // ダミー
+  uint32_t bad = 0;
+  int rot = rotOf[curBoard];
+  for (uint32_t i = 0; i < 480u * rows; i++) {
+    uint16_t lo = xfer16(0xC0, 0x00), hi = xfer16(0xC0, 0x00);
+    if ((uint16_t)(lo | (hi << 8)) != face[rotatedIndex(i % 480, i / 480, rot)]) bad++;
+  }
+  drawToPage(0);
+  return bad;
+}
+
+void retentionTest(int seconds) {
+  const uint16_t *face = boardFace(curBoard);
+  drawToPage(34);
+  drawRegion(face, 0, 0, 480, 480);
+  drawToPage(0);
+  uint32_t b0 = checkRows(face, 34, 40);
+  Serial.printf("Y board %d: page 34 right after writing: %lu of 19200 pixels differ\n", curBoard, (unsigned long)b0);
+  for (int s = 0; s < seconds; s++) { delay(1000); if (Serial.available()) break; }
+  uint32_t b1 = checkRows(face, 34, 40);
+  Serial.printf("Y board %d: page 34 after %d s: %lu of 19200 pixels differ\n", curBoard, seconds, (unsigned long)b1);
+}
+
+// ページを丸ごと読み返してシリアルに出す (#X<ページ>、選んだ基板)。"X begin" の行のあと 460,800 バイトそのまま、"X end" で終わる。
+// 1MHz で約 15 秒。読み返しは表示用メモリを少し乱すことがある (docs/STATUS.md)
+void dumpPage(int page) {
+  drawToPage(page);
+  writeReg16(0x56, 0); writeReg16(0x58, 0); writeReg16(0x5A, 480); writeReg16(0x5C, 480);
+  writeReg16(0x5F, 0); writeReg16(0x61, 0);
+  windowFull = true;
+  xfer16(0x00, 0x04);
+  xfer16(0xC0, 0x00);  // ダミー
+  Serial.setTxTimeoutMs(2000);  // 普段は送れない分を捨てる設定 (0)。ここでは 1 バイトも落とせないので待つ
+  Serial.println("X begin");
+  static uint8_t buf[960];
+  for (int y = 0; y < 480; y++) {
+    for (int i = 0; i < 960; i++) buf[i] = xfer16(0xC0, 0x00);
+    Serial.write(buf, 960);
+  }
+  Serial.flush();
+  drawToPage(0);
+  Serial.println("\nX end");
+  Serial.setTxTimeoutMs(0);
+}
+
 // ---- パラパラ漫画 (#R で表示用メモリのページに直接受け、#M で再生) ----
 // コマ k は各基板のページ FLIP_BASE + k (#G が使う 0〜3 と、スプライトの続きを避ける)。24 コマで約 11MB、16MB に収まる。
 // 送る側 (host/clouds_hourly.py) で基板ごとの面と回転を済ませた、パネルの並びの画素を受ける
@@ -567,7 +656,10 @@ void playFlip(int ms, int frames) {
 // LT7680A-R の表示用メモリは 16MB。480x480 の 16 ビット色 1 枚 (460,800 バイト) を「ページ」と呼び、
 // ページ 0 と 1 を表と裏、ページ 2 を地球の画像 (消すときのコピー元) に使う
 static const uint32_t PAGE_BYTES = 480u * 480u * 2u;
-uint32_t pageAddr(int page) { return PAGE_BYTES * page; }
+#ifndef PAGE_STRIDE
+#define PAGE_STRIDE PAGE_BYTES  // 試験: -DPAGE_STRIDE=0x80000 でページを 512KB おきに置く
+#endif
+uint32_t pageAddr(int page) { return (uint32_t)PAGE_STRIDE * page; }
 
 // 主画面 (パネルに映す) の開始アドレス。REG[23h] を書いた時点で反映される
 void showPage(int page) { writeReg32(0x20, pageAddr(page)); }
@@ -1372,6 +1464,9 @@ void loop() {
       playFlip(ms > 0 ? ms : 200, n);
       break;
     }
+    case 'Z': probePages(); break;  // 表示用メモリのページがどこまで別々か確かめる (選んだ基板)
+    case 'Y': { long sec = Serial.parseInt(); retentionTest(sec > 0 ? sec : 120); break; }  // 表示していないページが時間で化けるか
+    case 'X': dumpPage(Serial.parseInt()); break;  // ページを丸ごと読み返してシリアルに出す (選んだ基板)
     case 'B': pageSelfTest(); break;  // ページの切り替えと LT7680 の中でのコピーを確かめる (選んだ基板)
     case 'T': {  // #T<コマ数>,<大きさ> 印を動かす速さを測る (既定 200 コマ、12 画素)
       long n = Serial.parseInt();
