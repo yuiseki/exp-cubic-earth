@@ -6,7 +6,7 @@
 # 1. メーカーの STEP (ER-TFT040-3-6011.zip の中身) を、パネルと基板の STL に分ける (約 40 秒)
 uv run --no-project --with gmsh --with numpy --with numpy-stl python step_parts.py ER-TFT040-3-6011.STEP
 
-# 2. 2 つの角モジュールで立方体を組み、合体と分解の 3MF を書く
+# 2. 2 つの山頂型モジュール (3 枚のパネルが 1 つの角に集まる形)で立方体を組み、合体と分解の 3MF を書く
 uv run --no-project --with numpy --with numpy-stl python cube.py --fpc top=-y,A=-z,B=-z
 
 # テスト
