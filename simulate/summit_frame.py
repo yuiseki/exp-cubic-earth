@@ -75,21 +75,24 @@ def slab(face, other, edge=EDGE):
     k, _ = _axis(seam)
     sk = float(np.sign(g.CORNER[k]))
     back = h - g.PANEL_SIZE[2] - SLOT_CLEARANCE
-    along = (-h, h + LIP)  # from the far end of the seam (flush with the next module's glass) to past the corner
-    front = axis_range_box({n: (back, h + LIP), (j, sj): (panel_edge - OVERLAP, h + LIP), (k, sk): along})
-    wall = axis_range_box({n: (back - BACK, back), (j, sj): (panel_edge - WALL_OVERLAP, h + LIP), (k, sk): along})
+    # from the far end of the seam (flush with the next module's glass) to
+    # past the corner for the lip; the wall stops at the third panel's back,
+    # or it would stand on that panel's glass at the corner
+    front = axis_range_box({n: (back, h + LIP), (j, sj): (panel_edge - OVERLAP, h + LIP), (k, sk): (-h, h + LIP)})
+    wall = axis_range_box({n: (back - BACK, back), (j, sj): (panel_edge - WALL_OVERLAP, h + LIP), (k, sk): (-h, back)})
     return front, wall
 
 
 def beam(f1, f2, edge=EDGE):
     """The thick beam along the seam, inside the corner the two panels'
     backs make: BEAM x BEAM from both back planes (with the slot clearance)
-    toward the cube's centre, the seam's full length."""
+    toward the cube's centre, from the seam's far end to the third panel's
+    back (where it meets the other two beams)."""
     h = edge / 2
     back = h - g.PANEL_SIZE[2] - SLOT_CLEARANCE
     k, _ = _axis(np.cross(f1.normal, f2.normal))
     sk = float(np.sign(g.CORNER[k]))
-    return axis_range_box({_axis(f1.normal): (back - BEAM, back), _axis(f2.normal): (back - BEAM, back), (k, sk): (-h, h + LIP)})
+    return axis_range_box({_axis(f1.normal): (back - BEAM, back), _axis(f2.normal): (back - BEAM, back), (k, sk): (-h, back)})
 
 
 def rail_boxes(plan=PLAN, edge=EDGE):
@@ -115,6 +118,14 @@ def cut_boxes(plan=PLAN, edge=EDGE):
         lo, hi = g.box_of(f.place(g.corners(g.FFC_STUB), edge))
         out.append((f"{f.name} ffc", (lo - PART_CLEARANCE, hi + PART_CLEARANCE)))
     return out
+
+
+def solid_at(p):
+    """Whether point p is inside the frame, from the boxes (no CAD)."""
+    p = np.asarray(p, float)
+    def inb(b):
+        return bool(np.all(p >= b[0]) and np.all(p <= b[1]))
+    return any(inb(b) for _, b in rail_boxes()) and not any(inb(b) for _, b in cut_boxes())
 
 
 def build(path_stem):

@@ -78,3 +78,28 @@ def test_a_beam_fills_the_inside_corner_behind_both_panels_of_each_seam():
             i = int(np.flatnonzero(f.normal)[0])
             span = np.sort(np.array([lo[i], hi[i]]) * f.normal[i])
             assert np.allclose(span, (back - sf.BEAM, back))
+
+
+def test_nothing_but_the_lips_lies_on_the_glass():
+    """Over each panel, in front of its glass, the frame reaches only
+    OVERLAP in from the two edges in slots, also at the corner where the
+    lips meet (the beams and walls of the other seams stop at the panel's
+    back)."""
+    fs = sf.first_module_faces()
+    h = sf.EDGE / 2
+    for f in fs.values():
+        i = int(np.flatnonzero(f.normal)[0])
+        lo, hi = sf.panel_box(f)
+        inner = []  # the panel's corner under the summit, then a step in by more than OVERLAP on both axes
+        p = np.where(g.CORNER * np.sqrt(3) > 0, hi, lo).astype(float)
+        p[i] = f.normal[i] * (h + sf.LIP / 2)
+        step = -np.sign(g.CORNER) * (sf.OVERLAP + 0.3)
+        step[i] = 0
+        assert not sf.solid_at(p + step), f.name
+        for k in range(3):  # and well inside along each edge
+            if k != i:
+                q = p + step
+                q[k] -= np.sign(g.CORNER[k]) * 20
+                assert not sf.solid_at(q), (f.name, k)
+        edge_in = p + step / (sf.OVERLAP + 0.3) * (sf.OVERLAP - 0.3)
+        assert sf.solid_at(edge_in), f.name  # the lip itself is there
