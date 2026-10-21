@@ -14,7 +14,7 @@ def test_edge_is_the_smallest_for_the_plan():
 
 def test_two_slabs_per_seam_each_a_lip_and_a_wall_all_reaching_the_corner():
     boxes = sf.rail_boxes()
-    assert len(boxes) == 15
+    assert len(boxes) == 12
     h = sf.EDGE / 2
     corner = np.array([h, -h, h])  # the module's outer corner (+x, -y, +z)
     for label, b in boxes:
@@ -47,16 +47,45 @@ def test_slot_is_the_panel_plus_clearance():
     assert np.isclose(g.PANEL_SIZE[2] + 2 * sf.SLOT_CLEARANCE, 2.38)
 
 
-def test_frame_is_one_solid_and_misses_every_part(tmp_path):
+def test_each_point_near_the_corner_belongs_to_the_seam_it_runs_furthest_along():
+    h = sf.EDGE / 2
+    seams = sf.seams()
+    assert [k for k, _ in seams] == [0, 2, 1]  # top/A along x, A/B along z, B/top along y
+    assert sf.owner((h - 10, -h + 1, h - 1)) == 0
+    assert sf.owner((h - 1, -h + 1, h - 10)) == 1
+    assert sf.owner((h - 1, -h + 10, h - 1)) == 2
+
+
+def test_the_three_bars_are_one_bar_turned_round_the_corner():
+    q = g._turn_about(g.CORNER, 2 * np.pi / 3)
+    fs = sf.first_module_faces()
+    assert np.allclose(q @ fs["top"].normal, fs["A"].normal)
+    rng = np.random.default_rng(0)
+    h = sf.EDGE / 2
+    pts = rng.uniform([-h, -h - 2, h - 9], [h + 2, -h + 9, h + 2], (4000, 3))  # round the top/A seam
+    hits = 0
+    for p in pts:
+        a = sf.solid_at(p, bar=0)
+        assert a == sf.solid_at(q @ p, bar=1) == sf.solid_at(q @ q @ p, bar=2)
+        hits += a
+    assert hits > 100
+
+
+def test_bars_are_separate_solids_that_do_not_overlap_and_miss_every_part(tmp_path):
     import gmsh
 
-    n, vol = sf.build(str(tmp_path / "frame"))
-    assert n == 1 and vol > 0
+    vols = sf.build(str(tmp_path / "frame"))
+    assert len(vols) == 3
+    assert max(vols) - min(vols) < 0.01 * max(vols)
     gmsh.initialize()
     try:
         gmsh.option.setNumber("General.Terminal", 0)
         occ = gmsh.model.occ
-        frame = occ.importShapes(str(tmp_path / "frame.step"))
+        frame = [t for i in range(3) for t in occ.importShapes(str(tmp_path / f"frame_bar{i}.step"))]
+        pair, _ = occ.intersect(frame[:1], frame[1:], removeObject=False, removeTool=False)
+        occ.synchronize()
+        assert sum(occ.getMass(d, t) for d, t in pair) < 1e-3
+        occ.remove(pair, recursive=True)
         parts = []
         for f in sf.PLAN.faces:
             for _, (lo, hi) in g.part_boxes(f, sf.EDGE) + [(l, g.box_of(f.place(g.corners(b), sf.EDGE))) for l, b in sf.ffc_boxes()]:
@@ -66,18 +95,6 @@ def test_frame_is_one_solid_and_misses_every_part(tmp_path):
         assert sum(occ.getMass(d, t) for d, t in common) < 1e-6
     finally:
         gmsh.finalize()
-
-
-def test_a_beam_fills_the_inside_corner_behind_both_panels_of_each_seam():
-    fs = sf.first_module_faces()
-    back = sf.EDGE / 2 - g.PANEL_SIZE[2] - sf.SLOT_CLEARANCE
-    beams = [b for label, b in sf.rail_boxes() if label.endswith("beam")]
-    assert len(beams) == 3
-    for (a, b), (lo, hi) in zip([("top", "A"), ("top", "B"), ("A", "B")], beams):
-        for f in (fs[a], fs[b]):
-            i = int(np.flatnonzero(f.normal)[0])
-            span = np.sort(np.array([lo[i], hi[i]]) * f.normal[i])
-            assert np.allclose(span, (back - sf.BEAM, back))
 
 
 def test_nothing_but_the_lips_lies_on_the_glass():
@@ -105,10 +122,18 @@ def test_nothing_but_the_lips_lies_on_the_glass():
         assert sf.solid_at(edge_in), f.name  # the lip itself is there
 
 
-def test_the_ffc_folds_inward_before_the_beam_so_the_beam_is_whole():
-    fs = sf.first_module_faces()
-    for a, b in [("top", "A"), ("A", "B"), ("B", "top")]:
-        lo, hi = sf.beam(fs[a], fs[b])
-        cuts = [c for l, c in sf.cut_boxes() if "ffc" in l]
-        for clo, chi in cuts:
-            assert not np.all(np.minimum(hi, chi) - np.maximum(lo, clo) > 1e-6), (a, b)
+def test_the_ffc_folds_inward_before_it_reaches_the_walls():
+    rails = [b for _, b in sf.rail_boxes()]
+    for lo, hi in [c for l, c in sf.cut_boxes() if "ffc" in l]:
+        for rlo, rhi in rails:
+            assert not np.all(np.minimum(hi, rhi) - np.maximum(lo, rlo) > 1e-6)
+
+
+def test_a_bar_lies_flat_for_printing(tmp_path):
+    from stl import mesh
+
+    sf.build(str(tmp_path / "frame"))
+    m = mesh.Mesh.from_file(str(tmp_path / "frame_bar0_print.stl"))
+    size = m.max_ - m.min_
+    assert np.isclose(m.min_[2], 0, atol=1e-6)
+    assert size[2] < 8 and size[0] > 80  # along x, a few mm high
