@@ -14,7 +14,7 @@ def test_edge_is_the_smallest_for_the_plan():
 
 def test_two_slabs_per_seam_each_a_lip_and_a_wall_all_reaching_the_corner():
     boxes = sf.rail_boxes()
-    assert len(boxes) == 12
+    assert len(boxes) == 15
     h = sf.EDGE / 2
     corner = np.array([h, -h, h])  # the module's outer corner (+x, -y, +z)
     for label, b in boxes:
@@ -66,3 +66,15 @@ def test_frame_is_one_solid_and_misses_every_part(tmp_path):
         assert sum(occ.getMass(d, t) for d, t in common) < 1e-6
     finally:
         gmsh.finalize()
+
+
+def test_a_beam_fills_the_inside_corner_behind_both_panels_of_each_seam():
+    fs = sf.first_module_faces()
+    back = sf.EDGE / 2 - g.PANEL_SIZE[2] - sf.SLOT_CLEARANCE
+    beams = [b for label, b in sf.rail_boxes() if label.endswith("beam")]
+    assert len(beams) == 3
+    for (a, b), (lo, hi) in zip([("top", "A"), ("top", "B"), ("A", "B")], beams):
+        for f in (fs[a], fs[b]):
+            i = int(np.flatnonzero(f.normal)[0])
+            span = np.sort(np.array([lo[i], hi[i]]) * f.normal[i])
+            assert np.allclose(span, (back - sf.BEAM, back))

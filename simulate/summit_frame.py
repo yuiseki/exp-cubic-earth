@@ -7,8 +7,10 @@ corner (top/A, A/B, B/top), from the corner to the far end of the seam.
 Seen across the seam it is an L of two slabs, one on each panel: each slab
 has a lip over the glass and a wall behind the panel, and the panel's edge
 slides into the slot between them. The two slots are square to each other,
-so the panels stand at 90 degrees. The three rails are one part, joined at
-the corner.
+so the panels stand at 90 degrees. Inside the corner the two panels' backs
+make, a thick beam (BEAM square) runs the seam's length. The three rails
+are one part, joined at the corner. Nothing but the lips holds the panels:
+no tape.
 
 All the parts here are boxes square to the cube's axes, so a rail slab is
 one box, and the slots and the passages for the boards, FPCs and FFCs are
@@ -33,6 +35,7 @@ LIP = 1.0  # in front of the glass
 OVERLAP = 1.0  # how far the lip reaches over the panel, from its edge (the glass's black border is about 1.4 from it)
 BACK = 1.2  # wall behind the panel
 WALL_OVERLAP = 3.0  # how far the wall reaches behind the panel: the depth of the slot
+BEAM = 6.0  # the beam in the inside corner behind both panels of a seam, square
 SLOT_CLEARANCE = 0.1  # each side of the panel in the slot (slot 2.38 for 2.18)
 PART_CLEARANCE = 0.5  # around the boards, FPCs and FFCs
 
@@ -78,6 +81,17 @@ def slab(face, other, edge=EDGE):
     return front, wall
 
 
+def beam(f1, f2, edge=EDGE):
+    """The thick beam along the seam, inside the corner the two panels'
+    backs make: BEAM x BEAM from both back planes (with the slot clearance)
+    toward the cube's centre, the seam's full length."""
+    h = edge / 2
+    back = h - g.PANEL_SIZE[2] - SLOT_CLEARANCE
+    k, _ = _axis(np.cross(f1.normal, f2.normal))
+    sk = float(np.sign(g.CORNER[k]))
+    return axis_range_box({_axis(f1.normal): (back - BEAM, back), _axis(f2.normal): (back - BEAM, back), (k, sk): (-h, h + LIP)})
+
+
 def rail_boxes(plan=PLAN, edge=EDGE):
     fs = first_module_faces(plan)
     out = []
@@ -85,6 +99,7 @@ def rail_boxes(plan=PLAN, edge=EDGE):
         for f, o in ((a, b), (b, a)):
             front, wall = slab(fs[f], fs[o], edge)
             out += [(f"{a}/{b} on {f}: lip", front), (f"{a}/{b} on {f}: wall", wall)]
+        out.append((f"{a}/{b}: beam", beam(fs[a], fs[b], edge)))
     return out
 
 
