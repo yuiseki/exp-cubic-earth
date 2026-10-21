@@ -115,3 +115,38 @@ def test_summit_up_stands_the_first_module_on_its_rim_with_the_corner_up():
     assert np.isclose(top[0], 0) and top[1] < 0
     for name in ("A", "B"):
         assert (r @ np.array(g.FIRST[name], float))[1] > 0
+
+
+PINWHEEL = g.Plan({"top": "-x", "A": "-z", "B": "+y"}, pinwheel=True)
+
+
+def _panel_reach(face, toward, edge):
+    """How far face's panel outline reaches along the axis toward (signed)."""
+    lo, hi = g.box_of(face.place(g.corners(g.PANEL), edge))
+    j = int(np.flatnonzero(toward)[0])
+    return max(toward[j] * lo[j], toward[j] * hi[j])
+
+
+def test_pinwheel_lays_each_summit_seams_panels_one_flush_one_tucked_behind():
+    edge = 80.0
+    h = edge / 2
+    fs = {f.name: f for f in PINWHEEL.faces}
+    tucked = h - g.PANEL_SIZE[2] - g.PINWHEEL_CLEARANCE
+    # round the corner top -> A -> B: each panel reaches the cube's edge
+    # toward the panel before it and tucks behind the one after it
+    for a, b in [("top", "A"), ("A", "B"), ("B", "top")]:
+        assert np.isclose(_panel_reach(fs[a], fs[b].normal, edge), tucked)
+        assert np.isclose(_panel_reach(fs[b], fs[a].normal, edge), h)
+
+
+def test_pinwheel_second_module_is_the_first_turned():
+    edge = 80.0
+    fs = {f.name: f for f in PINWHEEL.faces}
+    for a, b in g.PARTNER.items():
+        la = g.box_of(fs[a].place(g.corners(g.PANEL), edge))
+        lb = g.box_of(fs[b].place(g.corners(g.PANEL), edge))
+        assert np.allclose(g.box_of(g.corners(la) @ g.TURN.T), lb)
+
+
+def test_pinwheel_makes_the_cube_smaller():
+    assert g.minimum_edge(PINWHEEL) < g.minimum_edge(g.Plan(PINWHEEL.fpc)) - 2

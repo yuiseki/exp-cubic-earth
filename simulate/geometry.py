@@ -93,19 +93,32 @@ def parse_axis(s):
     return v
 
 
+PINWHEEL_CLEARANCE = 0.1  # between a tucked panel's edge and the back of the panel in front of it
+
+
 @dataclass
 class Face:
     name: str
     module: int
     normal: np.ndarray
     fpc: np.ndarray
+    # (direction, depth): the panel's outline reaches edge/2 - depth along
+    # that world direction (a neighbour's normal). Empty: centred on the face.
+    reach: tuple = ()
 
     @property
     def rotation(self):
         return face_rotation(self.normal, self.fpc)
 
     def place(self, points, edge):
-        return (np.asarray(points, float) - PANEL_CENTER) @ self.rotation.T + self.normal * edge / 2
+        out = (np.asarray(points, float) - PANEL_CENTER) @ self.rotation.T + self.normal * edge / 2
+        if self.reach:
+            outline = (corners(PANEL) - PANEL_CENTER) @ self.rotation.T
+            for d, depth in self.reach:
+                j = int(np.flatnonzero(np.round(d))[0])
+                s = float(np.sign(d[j]))
+                out[..., j] += s * (edge / 2 - depth - (s * outline[:, j]).max())
+        return out
 
     @property
     def ffc_direction(self):
@@ -115,6 +128,10 @@ class Face:
 @dataclass
 class Plan:
     fpc: dict  # first module: face name -> direction its FPC edge points to
+    # Overlap the panels at the corner instead of centring them: round the
+    # first module's corner (top -> A -> B), each panel reaches the cube's
+    # edge toward the panel before it and tucks behind the one after it.
+    pinwheel: bool = False
 
     @classmethod
     def default(cls):
@@ -123,10 +140,15 @@ class Plan:
     @property
     def faces(self):
         out = []
-        for name, normal in FIRST.items():
+        order = list(FIRST)
+        for i, (name, normal) in enumerate(FIRST.items()):
             n, d = np.array(normal, float), parse_axis(self.fpc[name])
-            out.append(Face(name, 1, n, d))
-            out.append(Face(PARTNER[name], 2, TURN @ n, TURN @ d))
+            reach = ()
+            if self.pinwheel:
+                before, after = (np.array(FIRST[order[(i + k) % 3]], float) for k in (-1, 1))
+                reach = ((before, 0.0), (after, PANEL_SIZE[2] + PINWHEEL_CLEARANCE))
+            out.append(Face(name, 1, n, d, reach))
+            out.append(Face(PARTNER[name], 2, TURN @ n, TURN @ d, tuple((TURN @ v, depth) for v, depth in reach)))
         return out
 
 

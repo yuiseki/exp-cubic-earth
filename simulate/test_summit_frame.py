@@ -20,6 +20,9 @@ def test_two_slabs_per_seam_each_a_lip_and_a_wall_all_reaching_the_corner():
     for label, b in boxes:
         if label.endswith("lip"):
             assert inside(b, corner)
+            # nothing outside the cube but in front of the face's own glass
+            out = np.maximum(b[1] - h, 0) + np.maximum(-h - b[0], 0)
+            assert np.count_nonzero(out) == 1 and np.isclose(out.max(), sf.LIP)
 
 
 def test_each_slab_covers_its_panels_edge_from_front_to_back():
@@ -31,11 +34,11 @@ def test_each_slab_covers_its_panels_edge_from_front_to_back():
             sj = o.normal[j]
             plo, phi = sf.panel_box(f)
             panel_edge = max(sj * plo[j], sj * phi[j])
-            for box, reach in zip(sf.slab(f, o), (sf.OVERLAP, sf.WALL_OVERLAP)):
-                along = np.array([box[0][i], box[1][i]]) * f.normal[i]
+            h = sf.EDGE / 2
+            for box, reach, stop in zip(sf.slab(f, o), (sf.OVERLAP, sf.WALL_OVERLAP), (h, h - g.PANEL_SIZE[2])):
                 across = np.array([box[0][j], box[1][j]]) * sj
                 assert np.isclose(across.min(), panel_edge - reach)
-                assert np.isclose(across.max(), sf.EDGE / 2 + sf.LIP)
+                assert np.isclose(across.max(), stop)  # the other panel's glass, or its back
             front, wall = (np.sort(np.array([b[0][i], b[1][i]]) * f.normal[i]) for b in sf.slab(f, o))
             # the lip in front of the glass, the wall behind the panel, the slot between
             assert np.isclose(front[1], sf.EDGE / 2 + sf.LIP)
@@ -136,4 +139,4 @@ def test_a_bar_lies_flat_for_printing(tmp_path):
     m = mesh.Mesh.from_file(str(tmp_path / "frame_bar0_print.stl"))
     size = m.max_ - m.min_
     assert np.isclose(m.min_[2], 0, atol=1e-6)
-    assert size[2] < 8 and size[0] > 80  # along x, a few mm high
+    assert size[2] < 8 and size[0] > 75  # along x, a few mm high

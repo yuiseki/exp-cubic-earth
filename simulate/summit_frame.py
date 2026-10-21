@@ -35,10 +35,10 @@ import geometry as g
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.join(HERE, "build")
-PLAN = g.Plan({"top": "-x", "A": "-z", "B": "+y"})
-EDGE = 81.69  # glass to glass, g.minimum_edge(PLAN)
+PLAN = g.Plan({"top": "-x", "A": "-z", "B": "+y"}, pinwheel=True)
+EDGE = 79.12  # glass to glass, g.minimum_edge(PLAN)
 
-LIP = 1.0  # in front of the glass
+LIP = 0.6  # in front of the glass
 OVERLAP = 1.0  # how far the lip reaches over the panel, from its edge (the glass's black border is about 1.4 from it)
 BACK = 1.2  # wall behind the panel
 WALL_OVERLAP = 3.0  # how far the wall reaches behind the panel: the depth of the slot
@@ -69,10 +69,15 @@ def panel_box(face, edge=EDGE):
 
 def slab(face, other, edge=EDGE):
     """The slab of the rail on the seam between face and other that lies on
-    face, as two boxes: the front one from the panel's back to in front of
-    its glass, reaching OVERLAP over the panel from its edge (the lip); the
-    back one, the wall behind the panel, reaching WALL_OVERLAP. Both run
-    from the cube's edge (plus LIP) inward."""
+    face, as two boxes: the front one from the panel's back to LIP in front
+    of its glass, reaching OVERLAP over the panel from its edge (the lip);
+    the back one, the wall behind the panel, reaching WALL_OVERLAP. Only the
+    lip stands in front of a glass plane, and only its own: across the seam
+    the front box stops at the other panel's glass plane (the cube's edge)
+    and the wall at the other panel's back, and along the seam both stop at
+    the third panel's glass or back. With the panels overlapped at the
+    corner (Plan.pinwheel) the lip of the panel tucked behind also covers
+    the side of the panel that reaches the edge."""
     h = edge / 2
     n, (j, sj) = _axis(face.normal), _axis(other.normal)
     lo, hi = panel_box(face, edge)
@@ -81,11 +86,9 @@ def slab(face, other, edge=EDGE):
     k, _ = _axis(seam)
     sk = float(np.sign(g.CORNER[k]))
     back = h - g.PANEL_SIZE[2] - SLOT_CLEARANCE
-    # from the far end of the seam (flush with the next module's glass) to
-    # past the corner for the lip; the wall stops at the third panel's back,
-    # or it would stand on that panel's glass at the corner
-    front = axis_range_box({n: (back, h + LIP), (j, sj): (panel_edge - OVERLAP, h + LIP), (k, sk): (-h, h + LIP)})
-    wall = axis_range_box({n: (back - BACK, back), (j, sj): (panel_edge - WALL_OVERLAP, h + LIP), (k, sk): (-h, back)})
+    # along the seam from its far end (flush with the next module's glass)
+    front = axis_range_box({n: (back, h + LIP), (j, sj): (panel_edge - OVERLAP, h), (k, sk): (-h, h)})
+    wall = axis_range_box({n: (back - BACK, back), (j, sj): (panel_edge - WALL_OVERLAP, h - g.PANEL_SIZE[2]), (k, sk): (-h, back)})
     return front, wall
 
 
