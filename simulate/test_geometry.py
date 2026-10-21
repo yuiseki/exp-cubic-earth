@@ -103,3 +103,15 @@ def test_earth_turns_can_start_the_sides_on_another_face():
     assert all(turns[f][1] == default[f][1] for f in "ABCD")
     # top: its FPC edge points to -x, so the panel's top is +x; face 4's top must point away from B (+x)
     assert turns["top"] == (4, 2)
+
+
+def test_summit_up_stands_the_first_module_on_its_rim_with_the_corner_up():
+    r = g.SUMMIT_UP
+    assert np.allclose(r @ r.T, np.eye(3))
+    assert np.isclose(np.linalg.det(r), 1)
+    assert np.allclose(r @ g.CORNER, (0, 0, 1))
+    # the top face leans toward the viewer (-y), the other two to the back
+    top = r @ np.array(g.FIRST["top"], float)
+    assert np.isclose(top[0], 0) and top[1] < 0
+    for name in ("A", "B"):
+        assert (r @ np.array(g.FIRST[name], float))[1] > 0

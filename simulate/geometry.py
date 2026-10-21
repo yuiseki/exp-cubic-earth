@@ -254,3 +254,16 @@ def search():
             "edge": minimum_edge(plan),
         })
     return rows
+
+
+def _summit_up():
+    """Rotation standing the first module on its rim, its corner (the summit)
+    straight up and the top face leaning toward the viewer (-y)."""
+    z = CORNER
+    top = np.array(FIRST["top"], float)
+    y = -(top - z * (z @ top))
+    y /= np.linalg.norm(y)
+    return np.array([np.cross(y, z), y, z])
+
+
+SUMMIT_UP = _summit_up()

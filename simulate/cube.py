@@ -13,7 +13,9 @@ made as small as it can be without two faces' parts overlapping.
 
 Needs build/panel.stl and build/board.stl from step_parts.py. Writes
 build/cube_<plan>.3mf (joined) and build/cube_<plan>_exploded.3mf (the
-second module pulled 40mm away along the cube's diagonal).
+second module pulled 40mm away along the cube's diagonal). --module also
+writes build/module_<plan>.3mf: the first module alone, standing on its
+rim with its corner (the summit) straight up and the top face toward -y.
 """
 import argparse
 import os
@@ -119,6 +121,7 @@ def main():
     ap.add_argument("--edge", type=float)
     ap.add_argument("--corner", help="triangular board in each corner: t,side,turn (corner_board.py)")
     ap.add_argument("--search", action="store_true", help="list the 64 ways to turn the first module's panels")
+    ap.add_argument("--module", action="store_true", help="also write the first module alone, standing summit up")
     args = ap.parse_args()
     if args.search:
         rows = sorted(g.search(), key=lambda r: (not r["inside"], r["turning"] is None, r["edge"]))
@@ -162,6 +165,14 @@ def main():
             lift = diagonal * EXPLODE_MM if exploded else np.zeros(3)
             parts.append(("module 2: corner board", COLORS["corner board"], corner @ g.TURN.T + lift))
         write_3mf(os.path.join(BUILD, f"cube_{tag}{'_exploded' if exploded else ''}.3mf"), parts)
+    if args.module:
+        parts = [p for f in faces if f.module == 1 for p in face_parts(f, edge, panel, board, np.zeros(3))]
+        if corner is not None:
+            parts.append(("module 1: corner board", COLORS["corner board"], corner))
+        parts = [(name, color, tris @ g.SUMMIT_UP.T) for name, color, tris in parts]
+        floor = min(tris[..., 2].min() for _, _, tris in parts)
+        parts = [(name, color, tris - [0, 0, floor]) for name, color, tris in parts]
+        write_3mf(os.path.join(BUILD, f"module_{tag}.3mf"), parts)
 
 
 if __name__ == "__main__":
