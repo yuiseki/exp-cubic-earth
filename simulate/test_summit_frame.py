@@ -59,7 +59,7 @@ def test_frame_is_one_solid_and_misses_every_part(tmp_path):
         frame = occ.importShapes(str(tmp_path / "frame.step"))
         parts = []
         for f in sf.PLAN.faces:
-            for _, (lo, hi) in g.part_boxes(f, sf.EDGE) + [("ffc", g.box_of(f.place(g.corners(g.FFC_STUB), sf.EDGE)))]:
+            for _, (lo, hi) in g.part_boxes(f, sf.EDGE) + [(l, g.box_of(f.place(g.corners(b), sf.EDGE))) for l, b in sf.ffc_boxes()]:
                 parts.append((3, occ.addBox(*lo, *(hi - lo))))
         common, _ = occ.intersect(frame, parts, removeObject=True, removeTool=True)
         occ.synchronize()
@@ -103,3 +103,12 @@ def test_nothing_but_the_lips_lies_on_the_glass():
                 assert not sf.solid_at(q), (f.name, k)
         edge_in = p + step / (sf.OVERLAP + 0.3) * (sf.OVERLAP - 0.3)
         assert sf.solid_at(edge_in), f.name  # the lip itself is there
+
+
+def test_the_ffc_folds_inward_before_the_beam_so_the_beam_is_whole():
+    fs = sf.first_module_faces()
+    for a, b in [("top", "A"), ("A", "B"), ("B", "top")]:
+        lo, hi = sf.beam(fs[a], fs[b])
+        cuts = [c for l, c in sf.cut_boxes() if "ffc" in l]
+        for clo, chi in cuts:
+            assert not np.all(np.minimum(hi, chi) - np.maximum(lo, clo) > 1e-6), (a, b)

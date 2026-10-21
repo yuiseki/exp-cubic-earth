@@ -106,6 +106,21 @@ def rail_boxes(plan=PLAN, edge=EDGE):
     return out
 
 
+# The FFC leaves CON1 toward the seam but folds inward (toward the cube's
+# centre) before it, so it never crosses the beam: in the panel frame it
+# runs from the board edge to FFC_TURN_X and then goes back from the panel
+# FFC_DOWN mm. A box for the fold and the leg, not the exact bend.
+FFC_TURN_X = 68.0
+FFC_DOWN = 25.0
+
+
+def ffc_boxes():
+    (x0, y0, z0), (_, y1, z1) = g.FFC_STUB
+    run = ((x0, y0, z0), (FFC_TURN_X, y1, z1))
+    leg = ((FFC_TURN_X - 3.0, y0, z0 - FFC_DOWN), (FFC_TURN_X, y1, z1))
+    return [("ffc run", run), ("ffc fold", leg)]
+
+
 def cut_boxes(plan=PLAN, edge=EDGE):
     """What the frame must leave room for: every face's panel (the slots,
     grown by SLOT_CLEARANCE) and its board, FPC and FFC (grown by
@@ -115,8 +130,9 @@ def cut_boxes(plan=PLAN, edge=EDGE):
         for label, (lo, hi) in g.part_boxes(f, edge):
             c = SLOT_CLEARANCE if label.endswith("panel") else PART_CLEARANCE
             out.append((label, (lo - c, hi + c)))
-        lo, hi = g.box_of(f.place(g.corners(g.FFC_STUB), edge))
-        out.append((f"{f.name} ffc", (lo - PART_CLEARANCE, hi + PART_CLEARANCE)))
+        for label, b in ffc_boxes():
+            lo, hi = g.box_of(f.place(g.corners(b), edge))
+            out.append((f"{f.name} {label}", (lo - PART_CLEARANCE, hi + PART_CLEARANCE)))
     return out
 
 
