@@ -84,7 +84,7 @@ def test_xiao_sockets_are_two_rows_15_24_apart_with_d0_and_5v_at_the_usb_end(pad
     assert pcbnew.ToMM(d0.x - v5.x) == pytest.approx(15.24)  # D0 column on the right, USB down
     assert pcbnew.ToMM(d0.y - d6.y) == pytest.approx(15.24)  # D0 at the bottom (USB end)
     assert pcbnew.ToMM(v5.y - d7.y) == pytest.approx(15.24)  # 5V at the bottom
-    assert d0.y == v5.y
+    assert pcbnew.ToMM(d0.y - v5.y) == pytest.approx(0, abs=1e-5)  # 1 nm off after the 180 degree turn
 
 
 def test_power_tracks_are_wide(pads):
@@ -101,3 +101,22 @@ def test_power_tracks_are_wide(pads):
                 narrow[t.GetNetname()] += pcbnew.ToMM(t.GetLength())
     # about 2.5mm per FFC connector (route.py's NARROW_POWER_MM)
     assert narrow["+5V"] + narrow["+3V3"] <= 7.5, narrow
+
+
+def test_board_is_36mm_square_without_holes(pads):
+    _, board = pads
+    bb = board.GetBoardEdgesBoundingBox()
+    assert pcbnew.ToMM(bb.GetWidth()) == pytest.approx(36.1, abs=0.01)  # plus the 0.1 mm edge line
+    assert pcbnew.ToMM(bb.GetHeight()) == pytest.approx(36.1, abs=0.01)  # plus the 0.1 mm edge line
+    assert not [fp.GetReference() for fp in board.GetFootprints() if fp.GetReference().startswith("H")]
+
+
+def test_decoder_and_capacitors_sit_under_the_xiao_between_the_sockets(pads):
+    _, board = pads
+    fps = {fp.GetReference(): fp for fp in board.GetFootprints()}
+    rows = [fps[r].GetBoundingBox(False) for r in ("J5", "J4")]  # left row, right row
+    xiao = fps["X1"].GetBoundingBox(False)
+    for ref in ("U1", "C1", "C2"):
+        bb = fps[ref].GetBoundingBox(False)
+        assert rows[0].GetRight() < bb.GetLeft() and bb.GetRight() < rows[1].GetLeft(), ref
+        assert xiao.GetTop() < bb.GetTop() and bb.GetBottom() < xiao.GetBottom(), ref

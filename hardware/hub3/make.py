@@ -22,7 +22,7 @@ import pcbnew
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "hub3"
 KICAD = "/usr/share/kicad"
-SIZE = 44.0  # square board, mm
+SIZE = 36.0  # square board, mm: the FFC connectors and the XIAO's sockets decide it (README)
 ORIGIN = (100.0, 100.0)  # board's top left corner on the PCB sheet
 
 # --- nets -------------------------------------------------------------------
@@ -69,11 +69,16 @@ FFC_FP = "cubic-earth:FFC_1.0mm_20P_Bottom_C132515"
 SOCKET_FP = "Connector_PinSocket_2.54mm:PinSocket_1x07_P2.54mm_Vertical"
 XIAO_Y = SIZE - 10.6  # XIAO centre: its board edge on ours, the USB-C past it
 FFC_DEPTH = 5.4  # the connector body; its cable opening is flush with the board edge
+FFC_HALF = 14.0  # half the connector's courtyard along the board edge
+# J2 takes the top strip (its courtyard reaches 7.62 into the board); J1
+# and J3 run down the sides below it, to the bottom edge.
+SIDE_Y = SIZE - FFC_HALF
 PARTS = {
-    "J1": ("cubic-earth:FFC_20P", "LCD0", FFC_FP, "C132515", ffc(0), (FFC_DEPTH, C, 90)),
+    "J1": ("cubic-earth:FFC_20P", "LCD0", FFC_FP, "C132515", ffc(0), (FFC_DEPTH, SIDE_Y, 90)),
     "J2": ("cubic-earth:FFC_20P", "LCD1", FFC_FP, "C132515", ffc(1), (C, FFC_DEPTH, 0)),
-    "J3": ("cubic-earth:FFC_20P", "LCD2", FFC_FP, "C132515", ffc(2), (SIZE - FFC_DEPTH, C, -90)),
-    "U1": ("74xx:74HC138", "74HC138", "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm", "C2674688", HC138, (C, 14.0, 90)),
+    "J3": ("cubic-earth:FFC_20P", "LCD2", FFC_FP, "C132515", ffc(2), (SIZE - FFC_DEPTH, SIDE_Y, -90)),
+    # U1, C1 and C2 sit under the XIAO, between its two sockets (8.5 mm tall)
+    "U1": ("74xx:74HC138", "74HC138", "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm", "C2674688", HC138, (C - 1.5, XIAO_Y - 3.0, 0)),
     # The XIAO itself is plugged in by hand: on the schematic only. Its two
     # female sockets are assembled. With the USB-C down, J4 is the right row
     # (XIAO pins 1-7, D0 at the bottom) and J5 the left row (pins 8-14, 5V
@@ -83,10 +88,9 @@ PARTS = {
            (C + 7.62, XIAO_Y + 7.62, 180)),
     "J5": ("cubic-earth:Socket_1x07", "XIAO D7-5V", SOCKET_FP, "C2832270", {k: XIAO[k + 7] for k in range(1, 8)},
            (C - 7.62, XIAO_Y - 7.62, 0)),
-    "C1": ("Device:C", "100nF", "Capacitor_SMD:C_0603_1608Metric", "C14663", {1: "+3V3", 2: "GND"}, (C + 7.5, 14.0, 90)),
-    "C2": ("Device:C", "10uF", "Capacitor_SMD:C_0805_2012Metric", "C15850", {1: "+5V", 2: "GND"}, (9.0, SIZE - 3.5, 0)),  # next to the XIAO 5V pin
+    "C1": ("Device:C", "100nF", "Capacitor_SMD:C_0603_1608Metric", "C14663", {1: "+3V3", 2: "GND"}, (C + 3.5, XIAO_Y - 3.0, 90)),
+    "C2": ("Device:C", "10uF", "Capacitor_SMD:C_0805_2012Metric", "C15850", {1: "+5V", 2: "GND"}, (C - 3.0, XIAO_Y + 6.5, 0)),  # toward the XIAO 5V pin
 }
-HOLES = [(3.5, 3.5), (SIZE - 3.5, 3.5), (3.5, SIZE - 3.5), (SIZE - 3.5, SIZE - 3.5)]
 
 
 def uid():
@@ -221,10 +225,10 @@ def write_footprints():
              '(property "Value" "XIAO" (at 0 0 0) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))))',
              '(fp_rect (start -8.95 -10.47) (end 8.95 10.6) (stroke (width 0.1) (type default)) (fill none) (layer "F.Fab"))',
              '(fp_rect (start -4.5 10.6) (end 4.5 12.1) (stroke (width 0.1) (type default)) (fill none) (layer "F.Fab"))',
-             '(fp_text user "XIAO" (at 0 -3 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))',
+             '(fp_text user "XIAO" (at 0 4 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))',
              '(fp_text user "USB" (at 0 8.5 0) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))))',
-             '(fp_text user "D0" (at 10.2 7.62 90) (layer "F.SilkS") (effects (font (size 0.8 0.8) (thickness 0.12))))',
-             '(fp_text user "5V" (at -10.2 7.62 90) (layer "F.SilkS") (effects (font (size 0.8 0.8) (thickness 0.12))))',
+             '(fp_text user "D0" (at 5.2 7.62 90) (layer "F.SilkS") (effects (font (size 0.8 0.8) (thickness 0.12))))',
+             '(fp_text user "5V" (at -5.2 7.62 90) (layer "F.SilkS") (effects (font (size 0.8 0.8) (thickness 0.12))))',
              ")"]
     with open(os.path.join(HERE, "cubic-earth.pretty", "XIAO_ESP32S3_Outline.kicad_mod"), "w") as f:
         f.write("\n".join(lines) + "\n")
@@ -331,8 +335,9 @@ def write_board(libs):
             field = fp.GetField("LCSC")
             field.SetVisible(False)
             field.SetLayer(pcbnew.F_Fab)
-        if fp_id == SOCKET_FP:
-            fp.Reference().SetVisible(False)  # J4's would sit on the board edge; the XIAO outline labels the rows
+        if fp_id == SOCKET_FP or ref in ("U1", "C1", "C2"):
+            # J4's would sit on the board edge, the others under the XIAO; the XIAO outline labels the rows
+            fp.Reference().SetVisible(False)
         names = pin_names(libs[PARTS[ref][0]])
         board.Add(fp)
         fp.SetPosition(pt(x, y))
@@ -348,17 +353,6 @@ def write_board(libs):
     fp.Reference().SetVisible(False)
     board.Add(fp)
     fp.SetPosition(pt(C, XIAO_Y))
-    for i, (x, y) in enumerate(HOLES, 1):
-        fp = pcbnew.FootprintLoad(f"{KICAD}/footprints/MountingHole.pretty", "MountingHole_2.2mm_M2")
-        fp.SetFPID(pcbnew.LIB_ID("MountingHole", "MountingHole_2.2mm_M2"))
-        fp.SetReference(f"H{i}")
-        fp.Reference().SetVisible(False)
-        fp.Value().SetVisible(False)
-        fp.SetBoardOnly(True)
-        fp.SetExcludedFromBOM(True)
-        fp.SetExcludedFromPosFiles(True)
-        board.Add(fp)
-        fp.SetPosition(pt(x, y))
 
     corners = [(0, 0), (SIZE, 0), (SIZE, SIZE), (0, SIZE)]
     for (x0, y0), (x1, y1) in zip(corners, corners[1:] + corners[:1]):
@@ -370,7 +364,7 @@ def write_board(libs):
         seg.SetWidth(mm(0.1))
         board.Add(seg)
 
-    for text, x, y, size, layer in [("cubic-earth hub3 rev A", C, C, 1.2, pcbnew.B_SilkS), ("USB", C, SIZE - 1.2, 0.8, pcbnew.F_SilkS)]:
+    for text, x, y, size, layer in [("cubic-earth hub3 rev B", C, 11.5, 1.2, pcbnew.B_SilkS), ("USB", C, SIZE - 1.2, 0.8, pcbnew.F_SilkS)]:
         t = pcbnew.PCB_TEXT(board)
         t.SetText(text)
         t.SetPosition(pt(x, y))
@@ -431,7 +425,7 @@ def write_project():
     with open(os.path.join(HERE, "fp-lib-table"), "w") as f:
         f.write('(fp_lib_table (version 7)\n'
                 '  (lib (name "cubic-earth") (type "KiCad") (uri "${KIPRJMOD}/cubic-earth.pretty") (options "") (descr ""))\n')
-        for lib in ("Package_SO", "Capacitor_SMD", "MountingHole", "Connector_PinSocket_2.54mm"):
+        for lib in ("Package_SO", "Capacitor_SMD", "Connector_PinSocket_2.54mm"):
             f.write(f'  (lib (name "{lib}") (type "KiCad") (uri "${{KICAD10_FOOTPRINT_DIR}}/{lib}.pretty") (options "") (descr ""))\n')
         f.write(")\n")
 
