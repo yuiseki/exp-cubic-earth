@@ -150,6 +150,24 @@ ssh pi5-deck "~/.venv-esptool/bin/python tmp/cubic-clouds/send_faces.py $PORT tm
 - その黒い所は、SSEC RealEarth の 1 時間ごとの全球赤外合成 (`globalir`、表記「Source: SSEC RealEarth, UW-Madison」が要る) の雲を、雲の無い Blue Marble に白く重ねて埋める。RealEarth の `/api/image` は Web メルカトル (GeoTIFF で確認) で、85 度まで、透かしなしは幅 1024 画素まで (1280 で「Size limit exceeded」の透かし)。85 度より先は 85 度の輪の平均の色。極夜では凍った海も冷たく、雲と同じく白く写る
 - `#U<面>` は面の画像を 4096 バイトずつ受けて PSRAM に置き (ビルドに `PSRAM=opi` が要る)、以後その面は焼き込みの地球の代わりに使う。1 面約 2〜2.6 秒。`#u` で焼き込みに戻す
 
+## 昼と夜と半透明の雲 (`host/scene_compose.py`)
+
+昼は雲の無い Blue Marble、夜は NASA Black Marble 2016 (GIBS の `VIIRS_Black_Marble`、街の灯り)、その上に雲を半透明で重ねた 6 面を作る (`face0-5.bin` と `faces.png`)。microSD のシーンとして `send_scene.py` で書く。
+
+```sh
+cd lt7680_multi/host
+P="uv run -q --no-project --with numpy --with pillow --with pyproj python -I scene_compose.py"
+$P ~/tmp/cubic-scene-night --night-only                          # 夜だけ (街の灯り)
+$P ~/tmp/cubic-scene-now --clouds 2026-10-19 --opacity 0.6       # 今の昼と夜の境目、雲 60%
+$P ~/tmp/cubic-scene-day50 --clouds 2026-10-19 --opacity 0.5 --time none   # 全部昼、雲 50%
+```
+
+- 雲の不透明度は、その日の GIBS の実色が雲の無い Blue Marble よりどれだけ明るいか (明るい砂漠や雪は Blue Marble にもあるので雲に数えない)。データの無い所 (極夜など) は雲なし
+- 雲は昼は白、夜は暗い灰色で重ね、`--opacity` の分だけ地面と街の灯りが透ける
+- 昼と夜の境目は太陽の位置 (NOAA の簡易式) から、太陽の高度で 6 度の幅でぼかす。`--time` で時刻を指定できる
+- GIBS の実色は、日付が新しいと合成が揃っていない (2026-10-28 に取った 10-27 は、南北アメリカの側に雲が無く、直線の境目があった)。2〜3 日前より古い日を使う
+- テスト: `uv run -q --no-project --with numpy --with pillow --with pyproj --with pytest python -m pytest -q test_scene_compose.py`
+
 ## 雲のパラパラ漫画 (`host/clouds_hourly.py`、`host/send_frames.py`、`#R`、`#M`)
 
 ```sh
