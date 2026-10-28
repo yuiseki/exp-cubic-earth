@@ -19,6 +19,7 @@
 #include "mover.h"  // (構造体は .ino に書くと Arduino の自動プロトタイプより後ろになる)
 #include <Preferences.h>
 #include <SPI.h>
+#include <SD.h>
 #include "soc/gpio_reg.h"
 #include "driver/gpio.h"
 
@@ -1231,6 +1232,59 @@ uint32_t verifyFace(const uint16_t *face) {
   return bad;
 }
 
+// ---- microSD (XIAO ESP32-S3 Sense の拡張ボード) ----
+// カードは LT7680 と同じ SPI (D8 SCK, D9 MISO, D10 MOSI) で、CS だけ GPIO21 (拡張ボードの R12 経由。XIAO の USER_LED と同じピン)。
+// SD ライブラリも LT7680 の読み書きも SPI のトランザクションを取るので、交互に使える (はず。#C で確かめる)
+#define SD_CS 21
+bool cardMounted = false;
+
+bool mountCard(uint32_t hz) {
+  if (cardMounted) return true;
+  cardMounted = SD.begin(SD_CS, SPI, hz, "/sd", 5);
+  if (!cardMounted) Serial.println("card: mount failed");
+  return cardMounted;
+}
+
+// #C[<MHz>]: 載せて、種類と大きさ、根の一覧を出し、面 1 枚ぶん (480x480x2 バイト) を書いて読み返し、速さを測る
+void cardTest(long mhz) {
+  if (mhz <= 0) mhz = 10;
+  if (cardMounted) { SD.end(); cardMounted = false; }
+  if (!mountCard(mhz * 1000000)) return;
+  static const char *types[] = {"none", "MMC", "SD", "SDHC", "unknown"};
+  uint8_t t = SD.cardType();
+  Serial.printf("card: %s, %llu MB, used %llu / %llu MB, SPI %ld MHz\n", types[t < 4 ? t : 4], SD.cardSize() >> 20,
+                SD.usedBytes() >> 20, SD.totalBytes() >> 20, mhz);
+  File root = SD.open("/");
+  int n = 0;
+  for (File f = root.openNextFile(); f && n < 20; f = root.openNextFile(), n++)
+    Serial.printf("card: /%s%s %u\n", f.name(), f.isDirectory() ? "/" : "", (unsigned)f.size());
+  root.close();
+  const size_t N = 480 * 480 * 2, CH = 4096;
+  static uint8_t buf[4096];
+  File f = SD.open("/cubic_test.bin", FILE_WRITE);
+  if (!f) { Serial.println("card: open for write failed"); return; }
+  uint32_t t0 = millis();
+  for (size_t i = 0; i < N; i += CH) {
+    size_t n = N - i < CH ? N - i : CH;
+    for (size_t j = 0; j < n; j++) buf[j] = (uint8_t)((i + j) * 7 + ((i + j) >> 9));
+    f.write(buf, n);
+  }
+  f.close();
+  uint32_t t1 = millis();
+  f = SD.open("/cubic_test.bin");
+  size_t bad = 0, got = 0;
+  for (size_t i = 0; i < N; i += CH) {
+    size_t r = f.read(buf, N - i < CH ? N - i : CH);
+    got += r;
+    for (size_t j = 0; j < r; j++) bad += buf[j] != (uint8_t)((i + j) * 7 + ((i + j) >> 9));
+  }
+  f.close();
+  uint32_t t2 = millis();
+  Serial.printf("card: wrote %u bytes in %lu ms, read %u in %lu ms, %u bad bytes%s\n", (unsigned)N, (unsigned long)(t1 - t0),
+                (unsigned)got, (unsigned long)(t2 - t1), (unsigned)bad, got == N ? "" : " (short read)");
+  SD.remove("/cubic_test.bin");
+}
+
 // ---- 起動の流れ ----
 // 「流れ」= LT7680 のリセット → PLL/SDRAM → 表示オン → 塗り → パネルの SWRESET + 初期化列 ×2。
 // LCM_RESET は全基板で共有なので、リセットは 1 回で全基板に掛かる。その後は基板ごとに設定する
@@ -1389,6 +1443,7 @@ void loop() {
       Serial.printf("cmd H: SCK and MOSI drive %ld\n", cap);
       break;
     }
+    case 'C': cardTest(Serial.parseInt()); break;  // #C[<MHz>] microSD (Sense の拡張ボード) を読み書きして速さを測る
     case 'N': {  // 面の割り当て用: 全基板を白地にして、名前 A, B, C と辺の番号 1〜4 を描く (face_label.h)。#E や x,n,r で地球に戻る
       int keep = curBoard;
       for (int b = 0; b < NUM_BOARDS; b++) {
