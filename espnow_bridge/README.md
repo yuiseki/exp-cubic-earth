@@ -13,3 +13,16 @@ esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset write-
 - `?` だけの行は、中継自身のチャンネルと、周りの Wi-Fi の受信の強さを出す
 - 付属のアンテナを U.FL に挿す。挿さないと電波がほとんど飛ばない (`../lt7680_multi/README.md`)
 - 2026-10-28 から、pi5-deck に XIAO ESP32-S3 `68:EE:8F:4B:1E:84` を挿して使っている (焼く前のフラッシュ全域は pi5-deck の `~/tmp/1e84-backup/flash_8MB.bin`)
+
+## 電池がどれだけ持つか (`battery_watch.py`)
+
+電池で動かしている立方体に、60 秒ごとに `#G40,1,30` (飛行機と船を 40 秒) と `#p` を XIAO の MAC あてに送り、ACK と ping の返りを CSV に 1 行ずつ書く。返らなくなった時刻が、電池の切れた時刻。
+
+```sh
+# pi5-deck (systemd のユーザー単位で、ssh を切っても続く)
+systemd-run --user --unit cube-battery --collect ~/.venv-esptool/bin/python -u battery_watch.py \
+  /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_68:EE:8F:4B:1E:84-if00 B8:F8:62:F8:DB:A0 \
+  ~/logs/cube-battery-YYYYMMDD.csv --until YYYY-MM-DDT12:00
+```
+
+列は `time`、`ack_G` (#G の ACK)、`ack_p` (#p の ACK)、`ping` (立方体からの ping が届いたか、ファームウェアが動いている印)。ACK は無線が受けた印で、ファームウェアが固まっていても返ることがある。
