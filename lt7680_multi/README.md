@@ -94,6 +94,17 @@ ssh pi5-deck "~/.venv-esptool/bin/python tmp/hub3/send_scene.py $PORT tmp/cubic-
 #s1
 ```
 
+読んだ面は `#U` と同じ PSRAM の面 (`faceOverride`) に置くので、そのあとの `#E` や `#G` (飛行機と船) もシーンの画像を背景に使う (`#u` で焼き込みの地球に戻る)。ISS の軌跡は、母艦でシーンの 6 面に描き込んで別のシーンにする:
+
+```sh
+# 母艦: clouds.py の面 (ここでは 2026-10-19) に、前後 90 分の ISS の軌跡と今の位置を描く (過去は橙、未来は水色、今は赤)
+uv run -q --no-project --with numpy --with sgp4 python -I host/scene_iss.py ~/tmp/cubic-clouds ~/tmp/cubic-scene-iss
+# pi5-deck: シーン 2 として書く (このモジュールの面 4、3、0 だけ)。そのあと ESP-NOW で #s2、#G60,1,30
+~/.venv-esptool/bin/python tmp/hub3/send_scene.py $PORT tmp/cubic-scene-iss 2 4 3 0
+```
+
+ISS の軌跡は描いた時刻のもので、動かない。ESP-NOW で `#s2` と `#G60,1,30` を送り、雲と ISS の上にラベル付きの飛行機と船 (102 個) を 60 秒動かせた (2026-10-28)。
+
 3 枚の切り替えは約 2.7 秒 (1 枚ごとに microSD から面を読んで約 0.3 秒、描いて約 0.6 秒)。シーン 0 (地球) と 1 (2026-10-19 の雲) を、ESP-NOW で 3 回切り替えて 3 回とも 3 枚に描けた (2026-10-28)。
 
 ## 地球の面

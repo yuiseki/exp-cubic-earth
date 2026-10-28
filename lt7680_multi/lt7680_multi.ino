@@ -1294,7 +1294,7 @@ void cardTest(long mhz) {
 // #s<k> で、各基板の面 (faceOf) をシーン k から読んで、回転 (rotOf) を付けて描く。読むのは基板の数だけ
 #define SD_HZ 20000000
 #define FACE_BYTES (480u * 480u * 2u)
-uint16_t *sceneBuf = nullptr;  // 読んだ面 1 枚 (PSRAM)
+// 読んだ面は #U と同じ faceOverride (PSRAM) に置くので、そのあとの #E、#G (飛行機と船) もシーンの画像を背景に使う。#u で焼き込みに戻る
 
 void scenePath(char *out, size_t n, int k, int f) { snprintf(out, n, "/scenes/%d/face%d.bin", k, f); }
 
@@ -1304,9 +1304,9 @@ bool loadSceneFace(int k, int f) {
   scenePath(path, sizeof path, k, f);
   File fl = SD.open(path);
   if (!fl || fl.size() != FACE_BYTES) { Serial.printf("scene: %s missing\n", path); if (fl) fl.close(); return false; }
-  if (!sceneBuf) sceneBuf = (uint16_t *)ps_malloc(FACE_BYTES);
-  if (!sceneBuf) { Serial.println("scene: no PSRAM"); fl.close(); return false; }
-  size_t got = fl.read((uint8_t *)sceneBuf, FACE_BYTES);
+  if (!faceOverride[f]) faceOverride[f] = (uint16_t *)ps_malloc(FACE_BYTES);
+  if (!faceOverride[f]) { Serial.println("scene: no PSRAM"); fl.close(); return false; }
+  size_t got = fl.read((uint8_t *)faceOverride[f], FACE_BYTES);
   fl.close();
   return got == FACE_BYTES;
 }
@@ -1319,7 +1319,7 @@ void showScene(int k) {
     curBoard = b;
     drawToPage(0);
     showPage(0);
-    if (drawRegion(sceneBuf, 0, 0, 480, 480)) shown++;
+    if (drawRegion(boardFace(b), 0, 0, 480, 480)) shown++;
   }
   curBoard = keep;
   Serial.printf("scene %d: %d of %d boards in %lu ms\n", k, shown, NUM_BOARDS, (unsigned long)(millis() - t0));
