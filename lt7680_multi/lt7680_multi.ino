@@ -8,13 +8,14 @@
 // 共有線: LCM_SDI/SDO/SCLK (D10/D9/D8)、LCD_DIN/LCD_SCLK (D5/D4)、LCM_RESET (D1)、BL (D3)
 // LCM_SDO (MISO) の共有は、非選択の LT7680 が SDO をハイインピーダンスにする場合だけ成立する (2 枚では成立を確認)
 //
-// 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、K/W 黒/白、r 状態、b バックライト
+// 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、N 全基板に白地の名前 (基板 0〜2 = A〜C) と辺の番号 (上から時計回りに 1〜4)、K/W 黒/白、r 状態、b バックライト
 // 面の割り当て (先頭の '#' は無くてよい): x,n[,r] で基板 x に面 n (0-5) を、時計回りに 90 度 x r (0-3) 回して描く。不揮発領域に保存し、再起動後も使う
 
 #include "earth_qsc480x6.h"
 #include "rotate.h"
 #include "qsc.h"
 #include "font5x7.h"
+#include "face_label.h"
 #include "mover.h"  // (構造体は .ino に書くと Arduino の自動プロトタイプより後ろになる)
 #include <Preferences.h>
 #include <SPI.h>
@@ -1368,6 +1369,16 @@ void loop() {
       break;
     case 'A': flowAll(0x07E0); Serial.println("cmd A: flow on all boards"); break;
     case 'E': drawFace(boardFace(curBoard)); break;
+    case 'N': {  // 面の割り当て用: 全基板を白地にして、名前 A, B, C と辺の番号 1〜4 を描く (face_label.h)。#E や x,n,r で地球に戻る
+      int keep = curBoard;
+      for (int b = 0; b < NUM_BOARDS; b++) {
+        curBoard = b;
+        streamPixels(0, 0, 480, 480, [b](int x, int y) { return faceLabelColor(b, x, y); });
+      }
+      curBoard = keep;
+      Serial.printf("cmd N: boards 0..%d show A..%c, edges 1 top, 2 right, 3 bottom, 4 left\n", NUM_BOARDS - 1, 'A' + NUM_BOARDS - 1);
+      break;
+    }
     case 'V': verifyFace(boardFace(curBoard)); break;
     case 'S': {
       long mhz = Serial.parseInt();
