@@ -8,5 +8,8 @@ esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset write-
 ```
 
 - 送った行ごとに `sent ok: <行>` (送信の待ち行列に入った) か `sent FAIL: <行>` を返す。ブロードキャストには届いたかの確認が無い
-- ESP-NOW で届いた行は `rx <MAC>: <行>` と出す
+- ESP-NOW で届いた行は `rx <MAC>: <行>` と出す。送ったあとに `delivered ok/FAIL to <MAC>` (ブロードキャストは電波に乗ったか、ユニキャストは相手の ACK が返ったか)
+- `!AA:BB:CC:DD:EE:FF <行>` はその MAC だけに送る (ユニキャスト。電波が届いているかの切り分け用)
+- `?` だけの行は、中継自身のチャンネルと、周りの Wi-Fi の受信の強さを出す
+- 付属のアンテナを U.FL に挿す。挿さないと電波がほとんど飛ばない (`../lt7680_multi/README.md`)
 - 2026-10-28 から、pi5-deck に XIAO ESP32-S3 `68:EE:8F:4B:1E:84` を挿して使っている (焼く前のフラッシュ全域は pi5-deck の `~/tmp/1e84-backup/flash_8MB.bin`)

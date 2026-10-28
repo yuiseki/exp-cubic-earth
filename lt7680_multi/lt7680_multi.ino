@@ -8,7 +8,7 @@
 // 共有線: LCM_SDI/SDO/SCLK (D10/D9/D8)、LCD_DIN/LCD_SCLK (D5/D4)、LCM_RESET (D1)、BL (D3)
 // LCM_SDO (MISO) の共有は、非選択の LT7680 が SDO をハイインピーダンスにする場合だけ成立する (2 枚では成立を確認)
 //
-// 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、N 全基板に白地の名前 (基板 0〜2 = A〜C) と辺の番号 (上から時計回りに 1〜4)、K/W 黒/白、r 状態、b バックライト
+// 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、s<k> microSD のシーン k、N 全基板に白地の名前 (基板 0〜2 = A〜C) と辺の番号 (上から時計回りに 1〜4)、K/W 黒/白、r 状態、b バックライト
 // 面の割り当て (先頭の '#' は無くてよい): x,n[,r] で基板 x に面 n (0-5) を、時計回りに 90 度 x r (0-3) 回して描く。不揮発領域に保存し、再起動後も使う
 
 #include "earth_qsc480x6.h"
@@ -1289,6 +1289,91 @@ void cardTest(long mhz) {
   SD.remove("/cubic_test.bin");
 }
 
+// ---- シーン (microSD の /scenes/<k>/face<f>.bin) ----
+// シーン k は 6 面の画像 (face<f>.bin、480x480 RGB565 リトルエンディアン、#U や host/clouds.py の face<f>.bin と同じ並び、回転前)。
+// #s<k> で、各基板の面 (faceOf) をシーン k から読んで、回転 (rotOf) を付けて描く。読むのは基板の数だけ
+#define SD_HZ 20000000
+#define FACE_BYTES (480u * 480u * 2u)
+uint16_t *sceneBuf = nullptr;  // 読んだ面 1 枚 (PSRAM)
+
+void scenePath(char *out, size_t n, int k, int f) { snprintf(out, n, "/scenes/%d/face%d.bin", k, f); }
+
+bool loadSceneFace(int k, int f) {
+  if (!mountCard(SD_HZ)) return false;
+  char path[40];
+  scenePath(path, sizeof path, k, f);
+  File fl = SD.open(path);
+  if (!fl || fl.size() != FACE_BYTES) { Serial.printf("scene: %s missing\n", path); if (fl) fl.close(); return false; }
+  if (!sceneBuf) sceneBuf = (uint16_t *)ps_malloc(FACE_BYTES);
+  if (!sceneBuf) { Serial.println("scene: no PSRAM"); fl.close(); return false; }
+  size_t got = fl.read((uint8_t *)sceneBuf, FACE_BYTES);
+  fl.close();
+  return got == FACE_BYTES;
+}
+
+void showScene(int k) {
+  uint32_t t0 = millis();
+  int keep = curBoard, shown = 0;
+  for (int b = 0; b < NUM_BOARDS; b++) {
+    if (!loadSceneFace(k, faceOf[b])) continue;
+    curBoard = b;
+    drawToPage(0);
+    showPage(0);
+    if (drawRegion(sceneBuf, 0, 0, 480, 480)) shown++;
+  }
+  curBoard = keep;
+  Serial.printf("scene %d: %d of %d boards in %lu ms\n", k, shown, NUM_BOARDS, (unsigned long)(millis() - t0));
+}
+
+File openSceneForWrite(int k, int f) {
+  char path[40];
+  snprintf(path, sizeof path, "/scenes/%d", k);
+  if (!SD.exists("/scenes")) SD.mkdir("/scenes");
+  if (!SD.exists(path)) SD.mkdir(path);
+  scenePath(path, sizeof path, k, f);
+  return SD.open(path, FILE_WRITE);
+}
+
+// #e<k>: 焼き込みの地球の 6 面を、シーン k として書き出す
+void exportEarth(int k) {
+  if (!mountCard(SD_HZ)) return;
+  uint32_t t0 = millis();
+  for (int f = 0; f < NUM_FACES; f++) {
+    File fl = openSceneForWrite(k, f);
+    if (!fl) { Serial.printf("e error: cannot write scene %d face %d\n", k, f); return; }
+    fl.write((const uint8_t *)EARTH_QSC480X6[f], FACE_BYTES);
+    fl.close();
+  }
+  Serial.printf("e done: earth as scene %d in %lu ms\n", k, (unsigned long)(millis() - t0));
+}
+
+// #w<k>,<f>: 面の画像を #U と同じやり方 (4096 バイトずつ、受けるたびに "k") でシリアルから受け、シーン k の面 f として書く。
+// 送り手は host/send_scene.py。本体のバイト列はシリアルからだけ受ける
+void receiveSceneFace(int k, int f) {
+  const uint32_t chunk = 4096;
+  static uint8_t buf[4096];
+  if (k < 0 || f < 0 || f >= NUM_FACES) { Serial.println("w error: scene >= 0, face 0-5"); return; }
+  if (!mountCard(SD_HZ)) return;
+  File fl = openSceneForWrite(k, f);
+  if (!fl) { Serial.println("w error: cannot open"); return; }
+  while (Serial.available()) Serial.read();
+  Serial.println("w ready");
+  uint32_t got = 0, t0 = millis();
+  while (got < FACE_BYTES) {
+    uint32_t want = min(chunk, FACE_BYTES - got), n = 0, last = millis();
+    while (n < want) {
+      int a = Serial.available();
+      if (a > 0) { n += Serial.readBytes(buf + n, min((uint32_t)a, want - n)); last = millis(); }
+      else if (millis() - last > 3000) { Serial.printf("w error: timeout at %lu\n", (unsigned long)(got + n)); fl.close(); return; }
+    }
+    fl.write(buf, n);
+    got += n;
+    Serial.print("k");
+  }
+  fl.close();
+  Serial.printf("\nw done %d %d in %lu ms\n", k, f, (unsigned long)(millis() - t0));
+}
+
 // ---- 起動の流れ ----
 // 「流れ」= LT7680 のリセット → PLL/SDRAM → 表示オン → 塗り → パネルの SWRESET + 初期化列 ×2。
 // LCM_RESET は全基板で共有なので、リセットは 1 回で全基板に掛かる。その後は基板ごとに設定する
@@ -1389,9 +1474,10 @@ void setup() {
 #define ESPNOW_CHANNEL 1
 #endif
 ByteRing<1024> espnowIn;
-uint32_t espnowDropped = 0;
+uint32_t espnowDropped = 0, espnowPackets = 0;
 
 void onEspnowRecv(const esp_now_recv_info_t *info, const uint8_t *data, int n) {
+  espnowPackets++;
   if (!espnowIn.pushAll(data, n)) espnowDropped++;
 }
 
@@ -1410,7 +1496,10 @@ void setupEspnow() {
   esp_now_register_recv_cb(onEspnowRecv);
   uint8_t m[6];
   esp_wifi_get_mac(WIFI_IF_STA, m);
-  Serial.printf("espnow: %02X:%02X:%02X:%02X:%02X:%02X, channel %d\n", m[0], m[1], m[2], m[3], m[4], m[5], ESPNOW_CHANNEL);
+  uint8_t ch = 0;
+  wifi_second_chan_t ch2;
+  esp_wifi_get_channel(&ch, &ch2);
+  Serial.printf("espnow: %02X:%02X:%02X:%02X:%02X:%02X, channel %d (asked %d)\n", m[0], m[1], m[2], m[3], m[4], m[5], ch, ESPNOW_CHANNEL);
 }
 
 bool armed = false;
@@ -1478,6 +1567,33 @@ void loop() {
       if (cap < 0 || cap > 3) { Serial.println("cmd H: error, 0-3"); break; }
       setSpiDrive(cap);
       Serial.printf("cmd H: SCK and MOSI drive %ld\n", cap);
+      break;
+    }
+    case 'p': {  // #p ESP-NOW で "ping <MAC>" を一斉送信する (電波が届くかの切り分け。espnow_bridge が rx と出す)
+      static const uint8_t bc[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+      if (!esp_now_is_peer_exist(bc)) {
+        esp_now_peer_info_t peer = {};
+        memcpy(peer.peer_addr, bc, 6);
+        peer.channel = ESPNOW_CHANNEL;
+        esp_now_add_peer(&peer);
+      }
+      const char msg[] = "ping from the cube";
+      Serial.printf("cmd p: %s\n", esp_now_send(bc, (const uint8_t *)msg, sizeof msg - 1) == ESP_OK ? "sent" : "send failed");
+      break;
+    }
+    case 'a': {
+        int n = WiFi.scanNetworks();
+        Serial.printf("%s %d access points\n", "scan:", n);
+        for (int i = 0; i < n && i < 8; i++) Serial.printf("%s   ch %d rssi %d %s\n", "scan:", WiFi.channel(i), WiFi.RSSI(i), WiFi.SSID(i).c_str());
+        WiFi.scanDelete();
+        esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+      } break;  // #a 周りの Wi-Fi を探して受信の強さを出す (無線とアンテナの確認)
+    case 's': showScene(cmdIn.parseInt()); break;  // #s<k> シーン k (microSD) を全基板に描く
+    case 'e': exportEarth(cmdIn.parseInt()); break;  // #e<k> 焼き込みの地球をシーン k として microSD に書く
+    case 'w': {  // #w<k>,<f> シーン k の面 f を受けて microSD に書く (host/send_scene.py)
+      long k = cmdIn.parseInt();
+      long f = cmdIn.read() == ',' ? cmdIn.parseInt() : -1;
+      receiveSceneFace(k, f);
       break;
     }
     case 'C': cardTest(cmdIn.parseInt()); break;  // #C[<MHz>] microSD (Sense の拡張ボード) を読み書きして速さを測る
@@ -1599,7 +1715,7 @@ void loop() {
       benchMarker(n, sz);
       break;
     }
-    case 'r': Serial.printf("cmd r: board %d STSR=0x%02X CCR=0x%02X DPCR=0x%02X\n", curBoard, readStatus(), readReg(0x01), readReg(0x12)); break;
+    case 'r': Serial.printf("cmd r: board %d STSR=0x%02X CCR=0x%02X DPCR=0x%02X, espnow %lu packets %lu dropped\n", curBoard, readStatus(), readReg(0x01), readReg(0x12), (unsigned long)espnowPackets, (unsigned long)espnowDropped); break;
     default: Serial.printf("cmd %c: unknown\n", c); break;
   }
 }
