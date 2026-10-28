@@ -1209,10 +1209,10 @@ uint32_t verifyFace(const uint16_t *face) {
   uint32_t bad = 0, t0 = millis();
   for (uint32_t i = 0; i < 480u * 480u; i++) {
     uint16_t lo = xfer16(0xC0, 0x00), hi = xfer16(0xC0, 0x00);
-    uint16_t got = lo | (hi << 8);
-    if (got != face[i] && bad++ < 5) {
+    uint16_t got = lo | (hi << 8), want = face[rotatedIndex(i % 480, i / 480, rotOf[curBoard])];  // drawRegion と同じく回転込み
+    if (got != want && bad++ < 5) {
       Serial.printf("verify NG at (%lu,%lu): got 0x%04X want 0x%04X\n", (unsigned long)(i % 480),
-                    (unsigned long)(i / 480), got, face[i]);
+                    (unsigned long)(i / 480), got, want);
     }
   }
   Serial.printf("board %d: verify %lu bad pixels of %u in %lu ms\n", curBoard, (unsigned long)bad, 480u * 480u,
