@@ -46,4 +46,5 @@ uv run --no-project --with numpy --with pytest python -m pytest -q test_summit_b
 - 組み方: 棒 3 本をブラケットに差す。そのあと LCD を 1 枚ずつ、その面の中で頂点に向かって斜めに押すと、2 本の棒のスリットに同時に入る
 - 体積 (2026-10-28): 棒 1 本 2.48cm³、ブラケット 1.47cm³、1 モジュール約 8.9cm³。棒は外の面を下に寝かせて印刷する (`build/summit_bars_bar0_print.stl`)
 - 出力: `build/summit_bars_bar<i>.stl/.step`、`build/summit_bars_bracket.stl/.step`、`build/summit_bars_module.3mf` (LCD と基板と並べたもの、頂点を上にして立てる)
+- コーナージョイント (`joint_at`、`build/summit_bars_joint.stl`): 長い棒とブラケットの代わりに、頂点のまわりだけを押さえる 1 個の部品。3 本の棒を頂点から継ぎ目に沿って 20mm (`JOINT_ARM`) で切り、1 個につなげたもの。アクリルの十字コーナージョイント (3mm 板用) の立体交差版で、各腕に交わらない 2 本のスリットがある。1.43cm³、20mm 角に収まる。外の面を下に置いて印刷すると高さ 20mm
 - 未決: モジュールどうしの継ぎ目 (外周の 6 本) と、棒の外周側の端の形

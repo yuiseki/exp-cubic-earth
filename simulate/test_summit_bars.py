@@ -79,3 +79,12 @@ def test_bracket_wraps_each_bar_end():
 
 def test_owner_splits_the_corner_by_mitres():
     assert sb.owner(at((1, 1, 30))) != sb.owner(at((1, 30, 1)))
+
+
+def test_corner_joint_is_the_bars_within_its_arm_length_of_the_vertex():
+    L = sb.JOINT_ARM
+    assert sb.joint_at(at((0.5, 10.0, 0.5)))           # the top/B arm, outer corner
+    assert not sb.joint_at(at((0.5, L + 1.0, 0.5)))    # past the arm
+    assert not sb.joint_at(at((2.0, 10.0, 6.0)))       # the top panel's slot
+    assert not sb.joint_at(at((6.0, 10.0, 6.0)))       # the inner corner
+    assert sb.joint_at(at((0.5, 0.5, 0.5)))            # the vertex itself

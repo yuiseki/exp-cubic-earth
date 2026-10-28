@@ -52,6 +52,7 @@ BRACKET = 16.0  # the bracket's reach from the outer faces
 BRACKET_TETRA = 26.0  # cut where the three depths beyond the panels' backs add up to more than this
 BAR_CLEAR = 0.1  # between the bracket's pockets and the bars
 PART_CLEAR = 0.5  # around the boards, FPCs and FFCs
+JOINT_ARM = 20.0  # the corner joint: each arm reaches this far along its seam from the vertex
 
 
 def plan():
@@ -155,6 +156,53 @@ def bracket_at(p):
     return not any(_in(p, b) for _, b in cut_boxes())
 
 
+def joint_at(p):
+    """The corner joint: the three bars within JOINT_ARM of the vertex along their seams, as one piece."""
+    p = np.asarray(p, float)
+    if any(_in(p, b) for _, b in cut_boxes()):
+        return False
+    fs = list(first_module_faces())
+    for (_, (a, b)), boxes in zip(seams(), bar_boxes()):
+        c = next(n for n in fs if n not in (a, b))
+        if depths(p)[c] <= JOINT_ARM and any(_in(p, bx) for bx in boxes):
+            return True
+    return False
+
+
+def build_joint(stem):
+    """Write the corner joint (in place, and standing on the top's outer face for printing); return its volume."""
+    import gmsh
+
+    gmsh.initialize()
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", 1.5)
+        gmsh.option.setNumber("Mesh.Binary", 1)
+        occ = gmsh.model.occ
+        add = lambda b: (3, occ.addBox(*b[0], *(np.asarray(b[1]) - b[0])))
+        fs = list(first_module_faces())
+        arms = []
+        for (_, (a, b)), boxes in zip(seams(), bar_boxes()):
+            c = next(n for n in fs if n not in (a, b))
+            clip = _depth_box({c: (0, JOINT_ARM)})
+            for bx in boxes:
+                lo, hi = np.maximum(bx[0], clip[0]), np.minimum(bx[1], clip[1])
+                arms.append(add((lo, hi)))
+        joint, _ = occ.fuse(arms[:1], arms[1:])
+        joint, _ = occ.cut(joint, [add(b) for _, b in cut_boxes()])
+        occ.synchronize()
+        solids = gmsh.model.getEntities(3)
+        assert len(solids) == 1, f"joint is {len(solids)} pieces"
+        vol = sum(occ.getMass(d, t) for d, t in solids)
+        gmsh.write(f"{stem}_joint.step")
+        gmsh.model.mesh.generate(2)
+        gmsh.write(f"{stem}_joint.stl")
+        _lay_flat(gmsh, occ, solids, f"{stem}_joint_print.stl")  # on the top's outer face
+        return vol
+    finally:
+        gmsh.finalize()
+
+
 def build(stem):
     """Write the three bars and the bracket (in place) and bar 0 laid flat; return the volumes."""
     import gmsh
@@ -248,6 +296,7 @@ def main():
     os.makedirs(BUILD, exist_ok=True)
     stem = os.path.join(BUILD, "summit_bars")
     vols = build(stem)
+    vols["joint"] = build_joint(stem)
     for k, v in vols.items():
         print(f"[summit bars] {k}: {v / 1000:.2f} cm3")
     panel = mesh.Mesh.from_file(os.path.join(BUILD, "panel.stl")).vectors.astype(float)
