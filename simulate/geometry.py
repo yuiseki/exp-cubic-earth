@@ -132,6 +132,8 @@ class Plan:
     # first module's corner (top -> A -> B), each panel reaches the cube's
     # edge toward the panel before it and tucks behind the one after it.
     pinwheel: bool = False
+    # Or stop both summit edges of every panel this far inside the glass plane's edge (summit_bars.py)
+    summit_inset: float = None
 
     @classmethod
     def default(cls):
@@ -147,6 +149,9 @@ class Plan:
             if self.pinwheel:
                 before, after = (np.array(FIRST[order[(i + k) % 3]], float) for k in (-1, 1))
                 reach = ((before, 0.0), (after, PANEL_SIZE[2] + PINWHEEL_CLEARANCE))
+            elif self.summit_inset is not None:
+                before, after = (np.array(FIRST[order[(i + k) % 3]], float) for k in (-1, 1))
+                reach = ((before, self.summit_inset), (after, self.summit_inset))
             out.append(Face(name, 1, n, d, reach))
             out.append(Face(PARTNER[name], 2, TURN @ n, TURN @ d, tuple((TURN @ v, depth) for v, depth in reach)))
         return out
