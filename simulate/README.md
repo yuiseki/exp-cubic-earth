@@ -50,3 +50,18 @@ uv run --no-project --with numpy --with pytest python -m pytest -q test_summit_b
 - 長い棒 (`long_bar_at`、`build/summit_bars_long_bar*.stl`): ジョイントの腕の先から継ぎ目の外周の端までの、同じ断面のまっすぐな棒。65.3mm、2.00cm³。腕と棒は突き合わせるだけで、LCD が両方のスリットを通るので向きがそろう。3 本は同じ形 (角のまわりに 3 分の 1 回すと移り合う、テストで確認)
 - 採用した組み合わせはジョイント 1 個と長い棒 3 本 (1 モジュール約 7.4cm³)。LCD と並べたものが `build/summit_joint_module.3mf`
 - 未決: モジュールどうしの継ぎ目 (外周の 6 本) と、棒の外周側の端の形
+
+## 立方体全体の枠: 8 個のジョイントと 12 本の棒 (`cube_frame.py`)
+
+`summit_bars.py` の断面のまま、8 個の頂点すべてにコーナージョイント (腕 20mm) を、12 本の稜すべてにジョイントの間の棒を置く。
+
+```sh
+uv run --no-project --with gmsh --with numpy --with numpy-stl python cube_frame.py
+uv run --no-project --with numpy --with pytest python -m pytest -q test_cube_frame.py
+```
+
+- LCD は面の中央に置く。外の稜は長い辺 76.54mm に (4.38 + 0.1)mm を 2 回足した 85.5mm。長い辺はスリットの底の 0.1mm 手前、短い辺 (1.88mm 短い) は約 1mm 手前で止まり、くわえる深さは長い辺 2.4mm、短い辺 1.5mm
+- LCD の FPC は長い辺の端から 0.3mm はみ出して裏に折り返すので、その稜の棒には FPC の幅 (28mm) の逃げが彫られる
+- 体積 (2026-10-28): ジョイント 1.56cm³ x 8 (同じ形)、棒 45.5mm は 3 種類 (逃げなし 1.58cm³ x 3、FPC 1 本 1.47cm³ x 6、FPC 2 本 1.15cm³ x 3)、全体 29.5cm³。どれも 1 個の固まり
+- 出力: `build/cube_frame_joint<n>.stl`、`build/cube_frame_bar<n>.stl`、LCD と並べた `build/cube_frame.3mf`
+
