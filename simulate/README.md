@@ -47,4 +47,6 @@ uv run --no-project --with numpy --with pytest python -m pytest -q test_summit_b
 - 体積 (2026-10-28): 棒 1 本 2.48cm³、ブラケット 1.47cm³、1 モジュール約 8.9cm³。棒は外の面を下に寝かせて印刷する (`build/summit_bars_bar0_print.stl`)
 - 出力: `build/summit_bars_bar<i>.stl/.step`、`build/summit_bars_bracket.stl/.step`、`build/summit_bars_module.3mf` (LCD と基板と並べたもの、頂点を上にして立てる)
 - コーナージョイント (`joint_at`、`build/summit_bars_joint.stl`): 長い棒とブラケットの代わりに、頂点のまわりだけを押さえる 1 個の部品。3 本の棒を頂点から継ぎ目に沿って 20mm (`JOINT_ARM`) で切り、1 個につなげたもの。アクリルの十字コーナージョイント (3mm 板用) の立体交差版で、各腕に交わらない 2 本のスリットがある。1.43cm³、20mm 角に収まる。外の面を下に置いて印刷すると高さ 20mm
+- 長い棒 (`long_bar_at`、`build/summit_bars_long_bar*.stl`): ジョイントの腕の先から継ぎ目の外周の端までの、同じ断面のまっすぐな棒。65.3mm、2.00cm³。腕と棒は突き合わせるだけで、LCD が両方のスリットを通るので向きがそろう。3 本は同じ形 (角のまわりに 3 分の 1 回すと移り合う、テストで確認)
+- 採用した組み合わせはジョイント 1 個と長い棒 3 本 (1 モジュール約 7.4cm³)。LCD と並べたものが `build/summit_joint_module.3mf`
 - 未決: モジュールどうしの継ぎ目 (外周の 6 本) と、棒の外周側の端の形

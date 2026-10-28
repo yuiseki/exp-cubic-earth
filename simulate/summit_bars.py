@@ -23,7 +23,10 @@ own plane toward the corner, into its two slots at once.
 The module turns into itself a third of the way round its corner, so the
 three bars are one bar. Printed in clear resin, lying on an outer face.
 Writes build/summit_bars_bar<i>.stl/.step, build/summit_bars_bracket.stl/.step,
-build/summit_bars_bar0_print.stl and build/summit_bars_module.3mf.
+build/summit_bars_bar0_print.stl and build/summit_bars_module.3mf; and the
+chosen design, the corner joint (summit_bars_joint*) with the straight long
+bars that carry on from its arms (summit_bars_long_bar*), with the panels in
+build/summit_joint_module.3mf.
 """
 import itertools
 import os
@@ -169,6 +172,50 @@ def joint_at(p):
     return False
 
 
+def long_bar_at(p):
+    """The straight bars that carry on from the joint's arms to the far ends of the seams."""
+    p = np.asarray(p, float)
+    if any(_in(p, b) for _, b in cut_boxes()):
+        return False
+    fs = list(first_module_faces())
+    for (_, (a, b)), boxes in zip(seams(), bar_boxes()):
+        c = next(n for n in fs if n not in (a, b))
+        if depths(p)[c] > JOINT_ARM and any(_in(p, bx) for bx in boxes):
+            return True
+    return False
+
+
+def build_long_bar(stem):
+    """Write the top/A long bar (the three are the same) in place and lying flat; return its volume and length."""
+    import gmsh
+
+    gmsh.initialize()
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", 2.0)
+        gmsh.option.setNumber("Mesh.Binary", 1)
+        occ = gmsh.model.occ
+        add = lambda b: (3, occ.addBox(*b[0], *(np.asarray(b[1]) - b[0])))
+        (_, (a, b)), boxes = seams()[0], bar_boxes()[0]
+        c = next(n for n in first_module_faces() if n not in (a, b))
+        clip = _depth_box({c: (JOINT_ARM, OUT_EDGE)})
+        parts = [add((np.maximum(bx[0], clip[0]), np.minimum(bx[1], clip[1]))) for bx in boxes]
+        bar, _ = occ.fuse(parts[:1], parts[1:])
+        bar, _ = occ.cut(bar, [add(bx) for _, bx in cut_boxes()])
+        occ.synchronize()
+        solids = gmsh.model.getEntities(3)
+        assert len(solids) == 1, f"long bar is {len(solids)} pieces"
+        vol = sum(occ.getMass(d, t) for d, t in solids)
+        x0, _, _, x1, _, _ = gmsh.model.getBoundingBox(-1, -1)
+        gmsh.write(f"{stem}_long_bar.step")
+        gmsh.model.mesh.generate(2)
+        gmsh.write(f"{stem}_long_bar.stl")
+        _lay_flat(gmsh, occ, solids, f"{stem}_long_bar_print.stl")
+        return vol, x1 - x0
+    finally:
+        gmsh.finalize()
+
+
 def build_joint(stem):
     """Write the corner joint (in place, and standing on the top's outer face for printing); return its volume."""
     import gmsh
@@ -297,6 +344,8 @@ def main():
     stem = os.path.join(BUILD, "summit_bars")
     vols = build(stem)
     vols["joint"] = build_joint(stem)
+    vols["long bar"], length = build_long_bar(stem)
+    print(f"[summit bars] long bar: {length:.2f} mm long")
     for k, v in vols.items():
         print(f"[summit bars] {k}: {v / 1000:.2f} cm3")
     panel = mesh.Mesh.from_file(os.path.join(BUILD, "panel.stl")).vectors.astype(float)
@@ -309,6 +358,17 @@ def main():
     floor = min(tris[..., 2].min() for _, _, tris in parts)
     parts = [(name, color, tris - [0, 0, floor]) for name, color, tris in parts]
     cube.write_3mf(os.path.join(BUILD, "summit_bars_module.3mf"), parts)
+    # the joint and the three long bars (the top/A one turned a third of the way round the corner twice)
+    parts = [p for f in first_module_faces().values() for p in cube.face_parts(f, glass_edge(), panel, board, np.zeros(3))]
+    parts.append(("corner joint", "#BBDDFFAA", mesh.Mesh.from_file(f"{stem}_joint.stl").vectors.astype(float)))
+    bar = mesh.Mesh.from_file(f"{stem}_long_bar.stl").vectors.astype(float)
+    q = g._turn_about(g.CORNER, 2 * np.pi / 3)
+    for i in range(3):
+        parts.append((f"long bar {i}", "#CCE4FFAA", bar @ np.linalg.matrix_power(q, i).T))
+    parts = [(name, color, tris @ g.SUMMIT_UP.T) for name, color, tris in parts]
+    floor = min(tris[..., 2].min() for _, _, tris in parts)
+    parts = [(name, color, tris - [0, 0, floor]) for name, color, tris in parts]
+    cube.write_3mf(os.path.join(BUILD, "summit_joint_module.3mf"), parts)
 
 
 if __name__ == "__main__":

@@ -88,3 +88,20 @@ def test_corner_joint_is_the_bars_within_its_arm_length_of_the_vertex():
     assert not sb.joint_at(at((2.0, 10.0, 6.0)))       # the top panel's slot
     assert not sb.joint_at(at((6.0, 10.0, 6.0)))       # the inner corner
     assert sb.joint_at(at((0.5, 0.5, 0.5)))            # the vertex itself
+
+
+def test_long_bar_continues_each_arm_without_overlap():
+    L = sb.JOINT_ARM
+    p_bar = at((0.5, L + 5.0, 0.5))
+    assert sb.long_bar_at(p_bar) and not sb.joint_at(p_bar)
+    p_joint = at((0.5, L - 5.0, 0.5))
+    assert sb.joint_at(p_joint) and not sb.long_bar_at(p_joint)
+    assert not sb.long_bar_at(at((2.0, L + 5.0, 6.0)))  # the top panel's slot runs on through the bar
+
+
+def test_the_three_long_bars_are_one_bar_turned_round_the_corner():
+    q = g._turn_about(g.CORNER, 2 * np.pi / 3)
+    rng = np.random.default_rng(3)
+    for _ in range(3000):
+        p = at(rng.uniform([0, 0, 0], [8, sb.OUT_EDGE, 8]))  # round the top/B seam, its whole length
+        assert sb.long_bar_at(p) == sb.long_bar_at(q @ p), p
