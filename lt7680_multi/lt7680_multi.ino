@@ -20,6 +20,7 @@
 #include <Preferences.h>
 #include <SPI.h>
 #include "soc/gpio_reg.h"
+#include "driver/gpio.h"
 
 #ifndef NUM_BOARDS
 #define NUM_BOARDS 1
@@ -394,6 +395,16 @@ void fillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color
 #define PIXEL_SPI_HZ 20000000  // 画素のバーストだけの速さ (480x480 で 588ms)。レジスタの読み書きは 1MHz のまま
 #endif
 uint32_t pixelHz = PIXEL_SPI_HZ;  // 命令 #S<MHz> で変えられる
+// LT7680 の SPI の SCK と MOSI の出力の強さ (ESP32-S3 の GPIO_DRIVE_CAP 0〜3)。hub3 では、XIAO に一番近い J1 (基板 0) だけ、
+// 既定の 2 で 20MHz の画素が 1 ビットずれて大きく化けた (描くたびに 10 万画素前後)。1 と 3 では 3 枚とも 0 画素、0 は数十画素
+// (#V で読み返して数えた、2026-10-28)。強さの順に良くならず、仕組みは確かめていない。命令 #H<0-3> で変えられる
+#ifndef SPI_DRIVE
+#define SPI_DRIVE 1
+#endif
+void setSpiDrive(int cap) {
+  gpio_set_drive_capability((gpio_num_t)PIN_SCK, (gpio_drive_cap_t)cap);
+  gpio_set_drive_capability((gpio_num_t)PIN_MOSI, (gpio_drive_cap_t)cap);
+}
 
 // 選んだ基板の表示用メモリの (x0, y0) から w x h の四角形に、face の同じ場所 (基板の回転込み) を書く。
 // 64 バイトのバーストで、バーストごとに書き込み FIFO の空きを待つ。書けたら true
@@ -1269,6 +1280,7 @@ void setup() {
   uint32_t t0 = millis();
   loadFaces();
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, -1);
+  setSpiDrive(SPI_DRIVE);
   digitalWrite(PIN_RESET, LOW);  // LCM_RESET は全基板で共通
   delay(LT_RESET_HOLD_MS);
   digitalWrite(PIN_RESET, HIGH);
@@ -1287,13 +1299,13 @@ void setup() {
   digitalWrite(PIN_BL, HIGH);
   uint32_t t1 = millis();
   while (millis() < 3000) delay(10);  // シリアルの読み手が付いてから報告する
-  Serial.printf("reset reason: %d, boards: %d, select: %s, pixel SPI %lu Hz\n", (int)esp_reset_reason(), NUM_BOARDS,
+  Serial.printf("reset reason: %d, boards: %d, select: %s, pixel SPI %lu Hz, drive %d\n", (int)esp_reset_reason(), NUM_BOARDS,
 #ifdef BOARD_SELECT_DIRECT
                 "direct",
 #else
                 "74HC138",
 #endif
-                (unsigned long)pixelHz);
+                (unsigned long)pixelHz, SPI_DRIVE);
   for (int b = 0; b < NUM_BOARDS; b++) Serial.printf("diag: board %d lt7680 %s, face %d, turn %d\n", b, ok[b] ? "OK" : "FAILED", faceOf[b], rotOf[b]);
   Serial.printf("diag: boot %u-%u ms, STSR=0x%02X\n", t0, t1, readStatus());
 #else
@@ -1301,6 +1313,7 @@ void setup() {
   delay(1500);
   loadFaces();
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, -1);
+  setSpiDrive(SPI_DRIVE);
   for (int f = 0; f < BOOT_FLOWS; f++) flowAll(0x07E0);
   for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; drawFace(boardFace(curBoard)); }
   curBoard = 0;
@@ -1369,6 +1382,13 @@ void loop() {
       break;
     case 'A': flowAll(0x07E0); Serial.println("cmd A: flow on all boards"); break;
     case 'E': drawFace(boardFace(curBoard)); break;
+    case 'H': {  // #H<0-3> LT7680 の SPI の SCK と MOSI の出力の強さ (SPI_DRIVE の説明)
+      long cap = Serial.parseInt();
+      if (cap < 0 || cap > 3) { Serial.println("cmd H: error, 0-3"); break; }
+      setSpiDrive(cap);
+      Serial.printf("cmd H: SCK and MOSI drive %ld\n", cap);
+      break;
+    }
     case 'N': {  // 面の割り当て用: 全基板を白地にして、名前 A, B, C と辺の番号 1〜4 を描く (face_label.h)。#E や x,n,r で地球に戻る
       int keep = curBoard;
       for (int b = 0; b < NUM_BOARDS; b++) {
