@@ -48,3 +48,31 @@ def test_a_point_belongs_to_one_joint_or_one_bar():
     assert cf.part_at(v)[0] == "joint"
     e = np.array([0.0, H - 0.5, H - 0.5])
     assert cf.part_at(e)[0] == "bar"
+
+
+def test_lay_flat_puts_the_axis_on_x_and_the_face_on_the_floor():
+    tri = np.array([[[0.0, 0.0, 5.0], [0.0, 10.0, 5.0], [1.0, 0.0, 4.0]]])  # along y, outer face z = 5 (normal +z)
+    flat = cf.lay_flat(tri, 1, (0, 0, 1))
+    assert flat[..., 0].max() == pytest.approx(10)  # y became x
+    assert flat[0, 0, 2] == pytest.approx(0) and flat[0, 2, 2] == pytest.approx(1)  # the face at z = 5 is now the floor
+
+
+def test_slots_reach_their_full_depth_on_every_edge():
+    # half way along any edge, a point in each slot just above its bottom is empty, whatever panel sits there
+    for k, (i, si), (j, sj) in cf.edges():
+        for (a, sa), (b, sb) in (((i, si), (j, sj)), ((j, sj), (i, si))):
+            p = np.zeros(3)
+            p[a] = sa * (H - cf.WALL - cf.SLOT / 2)
+            p[b] = sb * (H - cf.EDGE_AT - 0.05)
+            assert cf.part_at(p) is None
+
+
+def test_no_slot_breaks_through_an_outer_face():
+    # every point just under an outer face, inside the outer walls' depth, is frame or nothing but never a slot
+    rng = np.random.default_rng(5)
+    for _ in range(4000):
+        p = rng.uniform(-H, H, 3)
+        a = rng.integers(3)
+        p[a] = rng.choice([-1, 1]) * (H - rng.uniform(0, cf.WALL * 0.9))
+        for _, (lo, hi) in cf.slot_boxes():
+            assert not (np.all(p > lo) and np.all(p < hi)), p

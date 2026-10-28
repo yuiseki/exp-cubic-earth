@@ -61,7 +61,7 @@ uv run --no-project --with numpy --with pytest python -m pytest -q test_cube_fra
 ```
 
 - LCD は面の中央に置く。外の稜は長い辺 76.54mm に (4.38 + 0.1)mm を 2 回足した 85.5mm。長い辺はスリットの底の 0.1mm 手前、短い辺 (1.88mm 短い) は約 1mm 手前で止まり、くわえる深さは長い辺 2.4mm、短い辺 1.5mm
-- LCD の FPC は長い辺の端から 0.3mm はみ出して裏に折り返すので、その稜の棒には FPC の幅 (28mm) の逃げが彫られる
-- 体積 (2026-10-28): ジョイント 1.56cm³ x 8 (同じ形)、棒 45.5mm は 3 種類 (逃げなし 1.58cm³ x 3、FPC 1 本 1.47cm³ x 6、FPC 2 本 1.15cm³ x 3)、全体 29.5cm³。どれも 1 個の固まり
-- 出力: `build/cube_frame_joint<n>.stl`、`build/cube_frame_bar<n>.stl`、LCD と並べた `build/cube_frame.3mf`
-
+- スリットは LCD の大きさによらず、いつも底 (相手の面から 4.38mm) まで彫る。そのため棒 12 本は 1 つの形、ジョイント 8 個も 1 つの形で、どこに付けてもよい
+- 枠が逃げるのは LCD の本体と基板だけ。FPC と FFC は曲がる配線なので、CAD では扱わない
+- 体積 (2026-10-28): ジョイント 1.46cm³ x 8、棒 45.5mm 1.37cm³ x 12、全体 28.1cm³。どれも 1 個の固まりで閉じている (trimesh)
+- 出力: `build/cube_frame_joint<n>.stl`、`build/cube_frame_bar<n>.stl` (立方体の中の位置)、印刷用に外の面を下に寝かせた `build/cube_frame_print/` (ジョイントは高さ 20mm、棒は 45.5 x 6.88 x 6.88mm)、LCD と並べた `build/cube_frame.3mf`
