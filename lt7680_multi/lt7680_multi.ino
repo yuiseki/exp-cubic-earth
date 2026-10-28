@@ -22,6 +22,10 @@
 #include <SD.h>
 #include "soc/gpio_reg.h"
 #include "driver/gpio.h"
+#include <WiFi.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
+#include "byte_ring.h"
 
 #ifndef NUM_BOARDS
 #define NUM_BOARDS 1
@@ -1373,7 +1377,40 @@ void setup() {
   curBoard = 0;
   digitalWrite(PIN_BL, HIGH);
 #endif
+  setupEspnow();
   Serial.println("shell ready");
+}
+
+// ---- 命令の入力: USB シリアルと ESP-NOW ----
+// espnow_bridge (pi5-deck などに挿した ESP32) がブロードキャストする行を、シリアルに打った行と同じ命令として受ける。
+// 届いた ESP-NOW の塊を輪に貯め、loop の命令の読み取り (cmdIn) は輪を先に、空ならシリアルを読む。
+// 画像やコマを受ける命令 (#U、#R) の本体のバイト列は、今までどおりシリアルからだけ受ける
+#ifndef ESPNOW_CHANNEL
+#define ESPNOW_CHANNEL 1
+#endif
+ByteRing<1024> espnowIn;
+uint32_t espnowDropped = 0;
+
+void onEspnowRecv(const esp_now_recv_info_t *info, const uint8_t *data, int n) {
+  if (!espnowIn.pushAll(data, n)) espnowDropped++;
+}
+
+class CmdIn : public Stream {
+ public:
+  int available() override { return espnowIn.size() ? (int)espnowIn.size() : Serial.available(); }
+  int read() override { return espnowIn.size() ? espnowIn.pop() : Serial.read(); }
+  int peek() override { return espnowIn.size() ? espnowIn.peek() : Serial.peek(); }
+  size_t write(uint8_t b) override { return Serial.write(b); }
+} cmdIn;
+
+void setupEspnow() {
+  WiFi.mode(WIFI_STA);
+  esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  if (esp_now_init() != ESP_OK) { Serial.println("espnow: init failed"); return; }
+  esp_now_register_recv_cb(onEspnowRecv);
+  uint8_t m[6];
+  esp_wifi_get_mac(WIFI_IF_STA, m);
+  Serial.printf("espnow: %02X:%02X:%02X:%02X:%02X:%02X, channel %d\n", m[0], m[1], m[2], m[3], m[4], m[5], ESPNOW_CHANNEL);
 }
 
 bool armed = false;
@@ -1394,14 +1431,14 @@ void loadFaces() {
 // x,n[,r] の x を読んだあと: ',' が来れば面番号 (と回転) を読んで割り当てる。来なければ false
 bool assignFace(int x) {
   uint32_t t = millis();
-  while (!Serial.available() && millis() - t < 50) delay(1);
-  if (Serial.peek() != ',') return false;
-  Serial.read();
-  long n = Serial.parseInt();
+  while (!cmdIn.available() && millis() - t < 50) delay(1);
+  if (cmdIn.peek() != ',') return false;
+  cmdIn.read();
+  long n = cmdIn.parseInt();
   long r = x < NUM_BOARDS ? rotOf[x] : 0;  // 回転を省くと今のまま
-  if (Serial.peek() == ',') {
-    Serial.read();
-    r = Serial.parseInt();
+  if (cmdIn.peek() == ',') {
+    cmdIn.read();
+    r = cmdIn.parseInt();
   }
   if (x >= NUM_BOARDS || n < 0 || n >= NUM_FACES || r < 0 || r > 3) {
     Serial.printf("assign: board must be 0-%d, face 0-%d, turn 0-3\n", NUM_BOARDS - 1, NUM_FACES - 1);
@@ -1424,8 +1461,8 @@ bool assignFace(int x) {
 }
 
 void loop() {
-  if (!Serial.available()) { delay(5); return; }
-  char c = Serial.read();
+  if (!cmdIn.available()) { delay(5); return; }
+  char c = cmdIn.read();
   if (c == '#') { armed = true; return; }
   if (c >= '0' && c <= '9' && assignFace(c - '0')) { armed = false; return; }  // x,n (# の有無を問わない)
   if (!armed) return;
@@ -1437,13 +1474,13 @@ void loop() {
     case 'A': flowAll(0x07E0); Serial.println("cmd A: flow on all boards"); break;
     case 'E': drawFace(boardFace(curBoard)); break;
     case 'H': {  // #H<0-3> LT7680 の SPI の SCK と MOSI の出力の強さ (SPI_DRIVE の説明)
-      long cap = Serial.parseInt();
+      long cap = cmdIn.parseInt();
       if (cap < 0 || cap > 3) { Serial.println("cmd H: error, 0-3"); break; }
       setSpiDrive(cap);
       Serial.printf("cmd H: SCK and MOSI drive %ld\n", cap);
       break;
     }
-    case 'C': cardTest(Serial.parseInt()); break;  // #C[<MHz>] microSD (Sense の拡張ボード) を読み書きして速さを測る
+    case 'C': cardTest(cmdIn.parseInt()); break;  // #C[<MHz>] microSD (Sense の拡張ボード) を読み書きして速さを測る
     case 'N': {  // 面の割り当て用: 全基板を白地にして、名前 A, B, C と辺の番号 1〜4 を描く (face_label.h)。#E や x,n,r で地球に戻る
       int keep = curBoard;
       for (int b = 0; b < NUM_BOARDS; b++) {
@@ -1456,13 +1493,13 @@ void loop() {
     }
     case 'V': verifyFace(boardFace(curBoard)); break;
     case 'S': {
-      long mhz = Serial.parseInt();
+      long mhz = cmdIn.parseInt();
       if (mhz >= 1 && mhz <= 40) pixelHz = mhz * 1000000;
       Serial.printf("cmd S: pixel SPI %lu Hz\n", (unsigned long)pixelHz);
       break;
     }
     case 'F': {  // 選んだ基板に面 n (0〜3) を描く。並べ方を試す用
-      long n = Serial.parseInt();
+      long n = cmdIn.parseInt();
       if (n >= 0 && n < NUM_FACES) { Serial.printf("cmd F: board %d face %ld\n", curBoard, n); drawFace(EARTH_QSC480X6[n]); }
       else Serial.println("cmd F: face must be 0-5");
       break;
@@ -1474,7 +1511,7 @@ void loop() {
       break;
     }
     case 'L': {
-      long khz = Serial.parseInt();
+      long khz = cmdIn.parseInt();
       if (khz >= 10 && khz <= 10000) regHz = khz * 1000;
       Serial.printf("cmd L: register SPI %lu Hz\n", (unsigned long)regHz);
       break;
@@ -1515,22 +1552,22 @@ void loop() {
       break;
     }
     case 'D': {  // #D<秒>[,<ラベル 0/1>[,<基板あたりの飛行機>]] 架空の飛行機と船を動かす (既定 30 秒、ラベル無し、5 機)
-      long sec = Serial.parseInt();
-      bool labels = Serial.peek() == ',' && (Serial.read(), Serial.parseInt() == 1);
-      long planes = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 5;
+      long sec = cmdIn.parseInt();
+      bool labels = cmdIn.peek() == ',' && (cmdIn.read(), cmdIn.parseInt() == 1);
+      long planes = cmdIn.peek() == ',' ? (cmdIn.read(), cmdIn.parseInt()) : 5;
       demoMovers(sec > 0 ? sec : 30, labels, constrain(planes, 0, 200));
       break;
     }
     case 'G': {  // #G<秒>[,<ラベル 0/1>[,<基板あたりの飛行機>[,<切り替えを待つ 0/1、既定 1>[,<コマの間のレジスタ MHz、既定 10>]]]] #D のダブルバッファ版
-      long sec = Serial.parseInt();
-      bool labels = Serial.peek() == ',' && (Serial.read(), Serial.parseInt() == 1);
-      long planes = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 5;
-      bool vsync = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt() != 0) : true;
-      long mhz = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 10;
+      long sec = cmdIn.parseInt();
+      bool labels = cmdIn.peek() == ',' && (cmdIn.read(), cmdIn.parseInt() == 1);
+      long planes = cmdIn.peek() == ',' ? (cmdIn.read(), cmdIn.parseInt()) : 5;
+      bool vsync = cmdIn.peek() == ',' ? (cmdIn.read(), cmdIn.parseInt() != 0) : true;
+      long mhz = cmdIn.peek() == ',' ? (cmdIn.read(), cmdIn.parseInt()) : 10;
       demoDouble(sec > 0 ? sec : 30, labels, constrain(planes, 0, 200), vsync, constrain(mhz, 1, 10) * 1000000);  // 20MHz では状態の読みが化けた
       break;
     }
-    case 'U': receiveFace(Serial.parseInt()); break;  // #U<面> 面の画像を受け取る
+    case 'U': receiveFace(cmdIn.parseInt()); break;  // #U<面> 面の画像を受け取る
     case 'u': {  // 送られてきた面の画像を捨てて、焼き込みの地球に戻す
       for (int f = 0; f < NUM_FACES; f++) { free(faceOverride[f]); faceOverride[f] = nullptr; }
       for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; drawToPage(0); showPage(0); drawFace(boardFace(b)); }
@@ -1539,24 +1576,24 @@ void loop() {
       break;
     }
     case 'R': {  // #R<基板>,<コマ> パラパラ漫画の 1 コマを受ける
-      long b = Serial.parseInt();
-      long k = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 0;
+      long b = cmdIn.parseInt();
+      long k = cmdIn.peek() == ',' ? (cmdIn.read(), cmdIn.parseInt()) : 0;
       receivePage(b, k);
       break;
     }
     case 'M': {  // #M<ミリ秒>[,<コマ数>] パラパラ漫画を再生する
-      long ms = Serial.parseInt();
-      long n = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 0;
+      long ms = cmdIn.parseInt();
+      long n = cmdIn.peek() == ',' ? (cmdIn.read(), cmdIn.parseInt()) : 0;
       playFlip(ms > 0 ? ms : 200, n);
       break;
     }
     case 'Z': probePages(); break;  // 表示用メモリのページがどこまで別々か確かめる (選んだ基板)
-    case 'Y': { long sec = Serial.parseInt(); retentionTest(sec > 0 ? sec : 120); break; }  // 表示していないページが時間で化けるか
-    case 'X': dumpPage(Serial.parseInt()); break;  // ページを丸ごと読み返してシリアルに出す (選んだ基板)
+    case 'Y': { long sec = cmdIn.parseInt(); retentionTest(sec > 0 ? sec : 120); break; }  // 表示していないページが時間で化けるか
+    case 'X': dumpPage(cmdIn.parseInt()); break;  // ページを丸ごと読み返してシリアルに出す (選んだ基板)
     case 'B': pageSelfTest(); break;  // ページの切り替えと LT7680 の中でのコピーを確かめる (選んだ基板)
     case 'T': {  // #T<コマ数>,<大きさ> 印を動かす速さを測る (既定 200 コマ、12 画素)
-      long n = Serial.parseInt();
-      long sz = Serial.peek() == ',' ? (Serial.read(), Serial.parseInt()) : 12;
+      long n = cmdIn.parseInt();
+      long sz = cmdIn.peek() == ',' ? (cmdIn.read(), cmdIn.parseInt()) : 12;
       if (n <= 0) n = 200;
       if (sz < 1 || sz > 64) sz = 12;
       benchMarker(n, sz);

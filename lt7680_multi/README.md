@@ -8,15 +8,15 @@ ER-PCBA5981-1 (LT7680A-R) + ER-TFT040-3 (ST7701S) を 1 台の XIAO ESP32-S3 か
 
 ```sh
 # 構成 1: XIAO ESP32-S3 直結で 1 枚
-arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi --output-dir build/direct \
+arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi,PartitionScheme=max_app_8MB --output-dir build/direct \
   --build-property "compiler.cpp.extra_flags=-DBOARD_SELECT_DIRECT=1" lt7680_multi
 
 # 構成 2: XIAO ESP32-S3 + 74HC138 で 2 枚
-arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi --output-dir build/hc138x2 \
+arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi,PartitionScheme=max_app_8MB --output-dir build/hc138x2 \
   --build-property "compiler.cpp.extra_flags=-DNUM_BOARDS=2" lt7680_multi
 
 # 構成 3: XIAO ESP32-S3 + 74HC138 で 3 枚
-arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi --output-dir build/hc138x3 \
+arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi,PartitionScheme=max_app_8MB --output-dir build/hc138x3 \
   --build-property "compiler.cpp.extra_flags=-DNUM_BOARDS=3" lt7680_multi
 
 # 書き込み (別のファームが載っていた XIAO には、起動ローダーごと merged.bin を 0x0 に)
@@ -25,6 +25,17 @@ esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset \
 ```
 
 旗を付けないと 74HC138 で 1 枚 (`NUM_BOARDS=1`)。
+
+パーティションは `max_app_8MB` (アプリ 7.9MB、OTA なし)。焼き込みの地球 (約 2.8MB) と Wi-Fi/ESP-NOW (約 0.6MB) で、既定のアプリ領域 (3.3MB) に入らない。不揮発領域 (nvs、0x9000) は既定と同じ位置と大きさなので、既定のパーティションから切り替えるときは、パーティション表とアプリだけを焼けば面の割り当てが残る:
+
+```sh
+esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset write-flash \
+  0x8000 build/hc138x3/lt7680_multi.ino.partitions.bin \
+  0xe000 ~/.arduino15/packages/esp32/hardware/esp32/3.3.12/tools/partitions/boot_app0.bin \
+  0x10000 build/hc138x3/lt7680_multi.ino.bin
+```
+
+`merged.bin` を 0x0 に焼くと、隙間が 0xFF で埋まって面の割り当てが消える。
 
 ### 構成 1: 直結で 1 枚
 
@@ -61,6 +72,12 @@ esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset \
 hub3 では、ESP32-S3 の既定の強さ 2 のままだと、XIAO に一番近い J1 (基板 0) だけ、20MHz の画素が 1 ビットずれて大きく化けた (描くたびに 10 万画素前後、パネルに緑の帯)。SPI の線は XIAO から J1、J2、J3 の順に 1 本でつながっていて、J1 は XIAO から 7mm、J3 は 44mm。強さ 1 と 3 では 3 枚とも 0 画素、0 では数十画素 (`#V` で読み返して数えた、2026-10-28)。強さの順に良くならないので、仕組みは確かめていない。
 
 microSD は LT7680 と SPI を分け合える。32GB の SDHC (FAT32) で、面 1 枚分の書き込みが 20MHz で約 0.36 秒、読み出しが約 0.31 秒、化けは 0 バイト。そのあと 3 枚とも `#V` で 0 画素 (2026-10-28)。
+
+## ESP-NOW で命令を送る
+
+起動の最後に ESP-NOW (チャンネル 1、`ESPNOW_CHANNEL`) を受け始め、起動ログに `espnow: <MAC>, channel 1` と出す。届いた塊はシリアルに打った文字と同じ命令として読む (`byte_ring.h` の輪に貯め、命令の読み取りは輪を先に、空ならシリアル)。送り手は `../espnow_bridge` (USB の 1 行をブロードキャストする中継)。画像やコマの本体 (`#U`、`#R`) はシリアルからだけ受ける。
+
+pi5-deck に中継の XIAO (68:EE:8F:4B:1E:84) を挿し、`#N`、`#r`、`x,n,r` が届いて実行された。何もしていないときに `#r` 10 回で 10 回、`#N` で 3 枚を描いている最中に送った `#r` も 6 回で 6 回 (2026-10-28)。ブロードキャストは届いたかの確認が無いので、確実に届けたいときは返事 (シリアルのログ) を見る。
 
 ## 地球の面
 
