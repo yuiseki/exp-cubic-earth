@@ -165,8 +165,23 @@ $P ~/tmp/cubic-scene-day50 --clouds 2026-10-19 --opacity 0.5 --time none   # 全
 - 雲の不透明度は、その日の GIBS の実色が雲の無い Blue Marble よりどれだけ明るいか (明るい砂漠や雪は Blue Marble にもあるので雲に数えない)。データの無い所 (極夜など) は雲なし
 - 雲は昼は白、夜は暗い灰色で重ね、`--opacity` の分だけ地面と街の灯りが透ける
 - 昼と夜の境目は太陽の位置 (NOAA の簡易式) から、太陽の高度で 6 度の幅でぼかす。`--time` で時刻を指定できる
+- `--layers` で、雲の上に層を重ねる (`host/layers.py`、地球の正距円筒図 4096x2048 に 2 倍の大きさで描いて縮める)。`--dim` で地面と雲を暗くして、層を目立たせる
+  - `rail`: 世界の鉄道 (tile.yuiseki.net の `railways` の `railways_low`、z3 の 64 枚、© OpenStreetMap contributors、ODbL)。橙の線
+  - `rivers`: 世界の川 (同じく `rivers` の `rivers_low`)。水色の線。太くすると陸地が埋まるので 1 画素で薄く
+  - `airports`: OurAirports (パブリックドメイン、「Data from OurAirports」) の大きな空港と、定期便のある中くらいの空港 (3,291 件)。青緑の点
+  - `population`: Kontur Population 2023-11-01 の H3 解像度 4 (71,283 セル、80.3 億人、CC BY)。セルの中心に人数を足し、人数のままぼかしてから対数にする (対数にしてからぼかすと、セルの中心の間の空いた画素が網目に残った)。対数の下半分 (人の少ない所) は暗いまま
+  - タイルは `~/tmp/cubic-tiles/` にためる。Python の既定の User-Agent では tile.yuiseki.net が 403 を返すので、名前を付けて取る
+
+```sh
+P="uv run -q --no-project --with numpy --with pillow --with pyproj --with mapbox-vector-tile --with duckdb --with h3 python -I scene_compose.py"
+$P ~/tmp/cubic-scene-rail --night-only --dim 0.6 --layers rail
+$P ~/tmp/cubic-scene-rivers --time none --dim 0.45 --layers rivers
+$P ~/tmp/cubic-scene-airports --night-only --dim 0.5 --layers airports
+$P ~/tmp/cubic-scene-population --night-only --dim 0.4 --layers population
+```
+
 - GIBS の実色は、日付が新しいと合成が揃っていない (2026-10-28 に取った 10-27 は、南北アメリカの側に雲が無く、直線の境目があった)。2〜3 日前より古い日を使う
-- テスト: `uv run -q --no-project --with numpy --with pillow --with pyproj --with pytest python -m pytest -q test_scene_compose.py`
+- テスト: `uv run -q --no-project --with numpy --with pillow --with pyproj --with pytest python -m pytest -q test_scene_compose.py test_layers.py`
 
 ## 雲のパラパラ漫画 (`host/clouds_hourly.py`、`host/send_frames.py`、`#R`、`#M`)
 

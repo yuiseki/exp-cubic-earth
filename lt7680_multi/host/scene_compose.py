@@ -2,6 +2,7 @@
 
     uv run -q --no-project --with numpy --with pillow --with pyproj python -I scene_compose.py OUT_DIR \
         [--clouds 2026-10-27] [--opacity 0.6] [--time now|none|2026-10-28T12:00] [--night-only]
+        [--layers population,rivers,rail,airports]
 
 - Day: the cloudless Blue Marble (lt7680_earth/blue_marble_2002.jpg).
 - Night: NASA Black Marble 2016 (GIBS layer VIIRS_Black_Marble, cached in
@@ -13,6 +14,8 @@
   with --opacity, so the ground and the city lights show through.
 - --time: the sun's position for the day/night line (soft over about 6
   degrees); "none" draws day everywhere, --night-only night everywhere.
+- --layers: overlays from layers.py (railways and rivers from tile.yuiseki.net,
+  airports, population), each in its own colour over the clouds.
 Writes face0-5.bin (as clouds.py) and faces.png.
 """
 import argparse
@@ -27,6 +30,15 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # clouds.py beside this file (python -I leaves it out)
 import clouds  # noqa: E402
+import layers  # noqa: E402
+
+# layer: colour, strength (scales its alpha)
+LAYER_STYLE = {
+    "population": ((255, 170, 70), 0.95),
+    "rivers": ((120, 200, 255), 0.7),
+    "rail": ((255, 205, 120), 1.0),
+    "airports": ((90, 255, 230), 1.0),
+}
 
 NIGHT_LAYER = "VIIRS_Black_Marble"
 NIGHT_CACHE = os.path.expanduser("~/tmp/cubic-night")
@@ -90,6 +102,8 @@ def main():
     ap.add_argument("--opacity", type=float, default=0.6)
     ap.add_argument("--time", default="now", help="now, none (day everywhere) or an ISO time in UTC")
     ap.add_argument("--night-only", action="store_true")
+    ap.add_argument("--dim", type=float, default=1.0, help="scale the ground and clouds (0.5: half as bright) so the layers stand out")
+    ap.add_argument("--layers", default="", help="comma separated, drawn in this order: population, rivers, rail, airports")
     ap.add_argument("--lon0", type=float, default=139.767)
     ap.add_argument("--size", type=int, default=480)
     args = ap.parse_args()
@@ -113,7 +127,25 @@ def main():
         t = dt.datetime.now(dt.timezone.utc) if args.time == "now" else dt.datetime.fromisoformat(args.time).replace(tzinfo=dt.timezone.utc)
         slat, slon = subsolar(t)
         light, when = daylight(lat, lon, slat, slon), f"{t:%Y-%m-%d %H:%M}Z (sun over {slat:.1f}, {slon:.1f})"
-    img = compose(day, night, alpha, light, args.opacity)
+    img = compose(day, night, alpha, light, args.opacity) * args.dim
+    notes = []
+    for name in [n for n in args.layers.split(",") if n]:
+        if name == "rail":
+            a = layers.vector_lines("railways", "railways_low", W, H, width=2)
+        elif name == "rivers":
+            a = layers.vector_lines("rivers", "rivers_low", W, H, width=1)
+        elif name == "airports":
+            a, count = layers.airports(W, H)
+            notes.append(f"{count} airports")
+        elif name == "population":
+            g, people = layers.population(W, H)
+            a = np.clip((g - 0.45) / 0.5, 0, 1) ** 1.2  # the lower half of the log scale (sparse country) stays dark
+            notes.append(f"{people:,} people")
+        else:
+            raise SystemExit(f"unknown layer {name}")
+        colour, strength = LAYER_STYLE[name]
+        a = (a * strength)[..., None]
+        img = img * (1 - a) + np.array(colour, dtype=np.float32) * a
     centres = [(args.lon0 + 90 * k, 0) for k in range(4)] + [(args.lon0, 90), (args.lon0, -90)]
     faces = [clouds.face(img, lo, la, args.size) for lo, la in centres]
     os.makedirs(args.out, exist_ok=True)
@@ -124,7 +156,7 @@ def main():
     for k, (cx, cy) in enumerate([(1, 1), (2, 1), (3, 1), (0, 1), (1, 0), (1, 2)]):
         sheet.paste(Image.fromarray(np.clip(faces[k], 0, 255).astype(np.uint8)), (cx * n, cy * n))
     sheet.save(os.path.join(args.out, "faces.png"))
-    print(f"{when}, clouds {args.clouds or 'none'} at {args.opacity}: wrote {args.out}")
+    print(f"{when}, clouds {args.clouds or 'none'} at {args.opacity}, layers {args.layers or 'none'} {', '.join(notes)}: wrote {args.out}")
 
 
 if __name__ == "__main__":
