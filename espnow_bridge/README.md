@@ -16,13 +16,13 @@ esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset write-
 
 ## 電池がどれだけ持つか (`battery_watch.py`)
 
-電池で動かしている立方体に、60 秒ごとに `#G40,1,30` (飛行機と船を 40 秒) と `#p` を XIAO の MAC あてに送り、ACK と ping の返りを CSV に 1 行ずつ書く。返らなくなった時刻が、電池の切れた時刻。
+電池で動かしているモジュールに、60 秒ごとに `#G40,1,30` (飛行機と船を 40 秒) と `#p` を、XIAO の MAC あてに 1 台ずつ続けて送り、モジュールごとの ACK と ping の返りを CSV に 1 行ずつ書く。返らなくなった時刻が、電池の切れた時刻。MAC はいくつでも並べられる。ファームウェアは変えなくてよい (ブリッジが `rx <MAC>: ...` と送り主を付けて出すので、どのモジュールの ping かを区別できる)。
 
 ```sh
-# pi5-deck (systemd のユーザー単位で、ssh を切っても続く)
+# 母艦 (systemd のユーザー単位で、ssh を切っても続く)。pi5-deck は自分の電池で先に止まることがあった
 systemd-run --user --unit cube-battery --collect ~/.venv-esptool/bin/python -u battery_watch.py \
-  /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_68:EE:8F:4B:1E:84-if00 B8:F8:62:F8:DB:A0 \
-  ~/logs/cube-battery-YYYYMMDD.csv --until YYYY-MM-DDT12:00
+  /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_68:EE:8F:4B:1E:84-if00 \
+  ~/logs/cube-battery-YYYYMMDD.csv B8:F8:62:F8:DB:A0 8C:BF:EA:8F:3F:38 --until YYYY-MM-DDT12:00
 ```
 
-列は `time`、`ack_G` (#G の ACK)、`ack_p` (#p の ACK)、`ping` (立方体からの ping が届いたか、ファームウェアが動いている印)。ACK は無線が受けた印で、ファームウェアが固まっていても返ることがある。
+列は `time` と、モジュールごと (MAC の末尾 4 桁) に `ack_G_xxxx` (#G の ACK)、`ack_p_xxxx` (#p の ACK)、`ping_xxxx` (モジュールからの ping が届いたか、ファームウェアが動いている印)。テストは `uv run -q --no-project --with pyserial --with pytest python -m pytest -q test_battery_watch.py`。ACK は無線が受けた印で、ファームウェアが固まっていても返ることがある。
