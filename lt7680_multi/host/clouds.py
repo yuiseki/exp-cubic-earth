@@ -94,6 +94,7 @@ def merged(date_path, ir):
 
 def sample(img, lon, lat):
     """Bilinear sample of an equirectangular image at lon/lat (degrees), wrapping in longitude."""
+    H, W = img.shape[:2]
     fx = ((lon / 360.0) + 0.5) % 1.0 * W - 0.5
     fy = (0.5 - lat / 180.0) * H - 0.5
     x0, y0 = np.floor(fx).astype(int), np.floor(fy).astype(int)

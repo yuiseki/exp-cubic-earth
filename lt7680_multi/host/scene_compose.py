@@ -30,6 +30,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # clouds.py beside this file (python -I leaves it out)
 import clouds  # noqa: E402
+import equirect_scene  # noqa: E402
 import layers  # noqa: E402
 
 # layer: colour, strength (scales its alpha)
@@ -146,16 +147,7 @@ def main():
         colour, strength = LAYER_STYLE[name]
         a = (a * strength)[..., None]
         img = img * (1 - a) + np.array(colour, dtype=np.float32) * a
-    centres = [(args.lon0 + 90 * k, 0) for k in range(4)] + [(args.lon0, 90), (args.lon0, -90)]
-    faces = [clouds.face(img, lo, la, args.size) for lo, la in centres]
-    os.makedirs(args.out, exist_ok=True)
-    for k, f in enumerate(faces):
-        clouds.rgb565(f).astype("<u2").tofile(os.path.join(args.out, f"face{k}.bin"))
-    n = args.size
-    sheet = Image.new("RGB", (4 * n, 3 * n))
-    for k, (cx, cy) in enumerate([(1, 1), (2, 1), (3, 1), (0, 1), (1, 0), (1, 2)]):
-        sheet.paste(Image.fromarray(np.clip(faces[k], 0, 255).astype(np.uint8)), (cx * n, cy * n))
-    sheet.save(os.path.join(args.out, "faces.png"))
+    equirect_scene.write(equirect_scene.faces(img, args.lon0, args.size), args.out)
     print(f"{when}, clouds {args.clouds or 'none'} at {args.opacity}, layers {args.layers or 'none'} {', '.join(notes)}: wrote {args.out}")
 
 

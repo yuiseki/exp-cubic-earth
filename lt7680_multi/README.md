@@ -183,6 +183,20 @@ $P ~/tmp/cubic-scene-population --night-only --dim 0.4 --layers population
 - GIBS の実色は、日付が新しいと合成が揃っていない (2026-10-28 に取った 10-27 は、南北アメリカの側に雲が無く、直線の境目があった)。2〜3 日前より古い日を使う
 - テスト: `uv run -q --no-project --with numpy --with pillow --with pyproj --with pytest python -m pytest -q test_scene_compose.py test_layers.py`
 
+## 正距円筒図の画像をそのまま面に (`host/equirect_scene.py`)
+
+経緯度が等間隔の 2:1 の画像 (地球儀向けの画像の多く) を、6 面の face0-5.bin と faces.png にします。出力は scene_compose.py と同じ形で、そのまま send_scene.py で microSD に送れます。
+
+```sh
+P="uv run -q --no-project --with numpy --with pillow --with pyproj python -I equirect_scene.py"
+$P Dagik_EQ_centennial/data/images/map/map_0.jpg ~/tmp/cubic-scene-eq          # 左端が 180W (Dagik Earth の配布 zip)
+$P AM2SI20200925D_ITD_EQ.jpg ~/tmp/cubic-scene-seaice --west 0                  # 左端が 0 度 (国立極地研究所の Dagik Earth の画像)
+```
+
+- `--west`: 画像の左端の経度。ずれていると、faces.png の真ん中 (面 0) に日本以外が来ます。
+- Dagik Earth のコンテンツは All Rights Reserved のものがあるので、画像も面もこのリポジトリには入れません。
+- テスト: `uv run -q --no-project --with numpy --with pillow --with pyproj --with pytest python -m pytest -q test_equirect_scene.py`
+
 ## 雲のパラパラ漫画 (`host/clouds_hourly.py`、`host/send_frames.py`、`#R`、`#M`)
 
 ```sh
