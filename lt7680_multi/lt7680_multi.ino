@@ -403,9 +403,12 @@ void fillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color
 uint32_t pixelHz = PIXEL_SPI_HZ;  // 命令 #S<MHz> で変えられる
 // LT7680 の SPI の SCK と MOSI の出力の強さ (ESP32-S3 の GPIO_DRIVE_CAP 0〜3)。hub3 では、XIAO に一番近い J1 (基板 0) だけ、
 // 既定の 2 で 20MHz の画素が 1 ビットずれて大きく化けた (描くたびに 10 万画素前後)。1 と 3 では 3 枚とも 0 画素、0 は数十画素
-// (#V で読み返して数えた、2026-10-28)。強さの順に良くならず、仕組みは確かめていない。命令 #H<0-3> で変えられる
+// (#V で読み返して数えた、2026-10-28)。強さの順に良くならず、仕組みは確かめていない。命令 #H<0-3> で変えられる。
+// 2026-11-03、モジュール 2 で #G を続けると面が崩れた (電源を替えても崩れた)。#G の間のレジスタの読み返し (reg_verify.h) で、
+// 出力 1 ではレジスタ 10MHz で数秒のうちに 1〜2 枚のレジスタが化け (透明色、BTE の幅)、BTE が止まった。
+// 出力 3 では 10 分 549 回の読み返しで 3 枚とも 0 回、0 は全滅。それで既定を 3 にした (docs/STATUS.md)
 #ifndef SPI_DRIVE
-#define SPI_DRIVE 1
+#define SPI_DRIVE 3
 #endif
 void setSpiDrive(int cap) {
   gpio_set_drive_capability((gpio_num_t)PIN_SCK, (gpio_drive_cap_t)cap);
