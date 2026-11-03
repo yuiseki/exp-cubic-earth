@@ -8,7 +8,7 @@
 // 共有線: LCM_SDI/SDO/SCLK (D10/D9/D8)、LCD_DIN/LCD_SCLK (D5/D4)、LCM_RESET (D1)、BL (D3)
 // LCM_SDO (MISO) の共有は、非選択の LT7680 が SDO をハイインピーダンスにする場合だけ成立する (2 枚では成立を確認)
 //
-// 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、s<k> microSD のシーン k、N 全基板に白地の名前 (基板 0〜2 = A〜C) と辺の番号 (上から時計回りに 1〜4)、K/W 黒/白、r 状態、b バックライト
+// 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、s<k> microSD のシーン k、N 全基板に白地の名前 (基板 0〜2 = A〜C) と辺の番号 (上から時計回りに 1〜4)、K/W 黒/白、r 状態、b バックライト、i<分> 何もしないときにバックライトを消すまでの分 (USB ホストにつながっているときだけ、0 で消さない)
 // 面の割り当て (先頭の '#' は無くてよい): x,n[,r] で基板 x に面 n (0-5) を、時計回りに 90 度 x r (0-3) 回して描く。不揮発領域に保存し、再起動後も使う
 
 #include "earth_qsc480x6.h"
@@ -27,6 +27,7 @@
 #include <esp_wifi.h>
 #include "byte_ring.h"
 #include "reg_verify.h"
+#include "idle_backlight.h"
 
 #ifndef NUM_BOARDS
 #define NUM_BOARDS 1
@@ -1485,6 +1486,7 @@ void setup() {
   digitalWrite(PIN_BL, HIGH);
 #endif
   setupEspnow();
+  idleSetup();
   Serial.println("shell ready");
 }
 
@@ -1525,7 +1527,43 @@ void setupEspnow() {
 }
 
 bool armed = false;
-bool bl = true;
+bool bl = true;  // #b で切り替える (手で消したか)
+
+// 何もしていないときにバックライトを消す (idle_backlight.h)。分は NVS の "idle" に残す
+static const int IDLE_DEFAULT_MIN = 10;
+IdleBacklight idleBl;
+bool idleOff = false;
+
+void applyBacklight() { digitalWrite(PIN_BL, (bl && !idleOff) ? HIGH : LOW); }
+
+void idleSetup() {
+  prefs.begin("cube", true);
+  int m = prefs.getInt("idle", IDLE_DEFAULT_MIN);
+  prefs.end();
+  idleBl.timeoutMs = (uint32_t)m * 60000;
+  idleBl.activity(millis());
+  Serial.printf("idle: backlight off after %d min without commands while a USB host is attached (0: never)\n", m);
+}
+
+// loop の頭で毎回: ホストの有無を見て、消す・点けるが変わったら反映する
+void idleTick() {
+  uint32_t now = millis();
+  idleBl.host(HWCDC::isPlugged(), now);
+  bool o = idleBl.off(now);
+  if (o == idleOff) return;
+  idleOff = o;
+  applyBacklight();
+  Serial.printf("idle: backlight %s\n", o ? "off (USB host attached, no commands)" : "on (USB host gone)");
+}
+
+// 命令が来た: 待ちをやり直し、消していたら点ける
+void idleWake() {
+  idleBl.activity(millis());
+  if (!idleOff) return;
+  idleOff = false;
+  applyBacklight();
+  Serial.println("idle: backlight on (command)");
+}
 
 void loadFaces() {
   prefs.begin("cube", true);
@@ -1572,8 +1610,10 @@ bool assignFace(int x) {
 }
 
 void loop() {
+  idleTick();
   if (!cmdIn.available()) { delay(5); return; }
   char c = cmdIn.read();
+  idleWake();
   if (c == '#') { armed = true; return; }
   if (c >= '0' && c <= '9' && assignFace(c - '0')) { armed = false; return; }  // x,n (# の有無を問わない)
   if (!armed) return;
@@ -1656,7 +1696,18 @@ void loop() {
     }
     case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.printf("cmd K: board %d black\n", curBoard); break;
     case 'W': fillRect(0, 0, 479, 479, 0xFFFF); Serial.printf("cmd W: board %d white\n", curBoard); break;
-    case 'b': bl = !bl; digitalWrite(PIN_BL, bl); Serial.printf("cmd b: backlight %s\n", bl ? "on" : "off"); break;
+    case 'b': bl = !bl; applyBacklight(); Serial.printf("cmd b: backlight %s\n", bl ? "on" : "off"); break;
+    case 'i': {  // #i<分> 何もしないときにバックライトを消すまで (USB ホストがいるときだけ、0 で消さない)。#i だけなら今の値
+      if (!isdigit(cmdIn.peek())) { Serial.printf("cmd i: %lu min, host %s\n", (unsigned long)(idleBl.timeoutMs / 60000), idleBl.hostConnected(millis()) ? "attached" : "absent"); break; }
+      long m = cmdIn.parseInt();
+      if (m < 0 || m > 1440) { Serial.println("cmd i: error, 0-1440"); break; }
+      idleBl.timeoutMs = (uint32_t)m * 60000;
+      prefs.begin("cube", false);
+      prefs.putInt("idle", m);
+      prefs.end();
+      Serial.printf("cmd i: backlight off after %ld min without commands while a USB host is attached (saved)\n", m);
+      break;
+    }
 #ifdef BOARD_SELECT_DIRECT  // 74HC138 経由では CS を 1 本ずつ浮かせられない
     case 'P': {
       // 基板側のプルアップ/プルダウンの有無: 内蔵プルダウンで 1 なら外部プルアップ、内蔵プルアップで 0 なら外部プルダウン。
@@ -1740,4 +1791,5 @@ void loop() {
     case 'r': Serial.printf("cmd r: board %d STSR=0x%02X CCR=0x%02X DPCR=0x%02X, espnow %lu packets %lu dropped\n", curBoard, readStatus(), readReg(0x01), readReg(0x12), (unsigned long)espnowPackets, (unsigned long)espnowDropped); break;
     default: Serial.printf("cmd %c: unknown\n", c); break;
   }
+  idleBl.activity(millis());  // #G のような長い命令は、終わってから待ち始める
 }
