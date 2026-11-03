@@ -9,11 +9,40 @@ bytes, as send_faces.py does.
 """
 import os
 import sys
+import termios
 import time
 
 import serial
 
 from send_faces import CHUNK, SIZE, wait_for
+
+
+BOOT_MARKS = (b"ESP-ROM", b"rst:")
+
+
+def settle(port):
+    """After opening the port: if the XIAO is booting (opening it can reset it, as on pi4-deck
+    2026-10-29), wait for "shell ready" so the first #w is not lost. True if it had reset."""
+    time.sleep(1.0)
+    buf = port.read(port.in_waiting) if port.in_waiting else b""
+    if not any(m in buf for m in BOOT_MARKS):
+        return False
+    if b"shell ready" not in buf:
+        buf += wait_for(port, "shell ready", 15)
+    print("the XIAO reset when the port opened; waited for its shell")
+    return True
+
+
+def open_port(path):
+    port = serial.Serial(path, 115200, timeout=5)
+    try:  # do not drop DTR/RTS on close (a line change can reset the XIAO)
+        attrs = termios.tcgetattr(port.fd)
+        attrs[2] &= ~termios.HUPCL
+        termios.tcsetattr(port.fd, termios.TCSANOW, attrs)
+    except termios.error:
+        pass
+    settle(port)
+    return port
 
 
 def send(port, scene, face, path):
@@ -35,7 +64,7 @@ def send(port, scene, face, path):
 
 
 def main():
-    port = serial.Serial(sys.argv[1], 115200, timeout=5)
+    port = open_port(sys.argv[1])
     scene = int(sys.argv[3])
     faces = [int(f) for f in sys.argv[4:]] or list(range(6))
     for f in faces:
