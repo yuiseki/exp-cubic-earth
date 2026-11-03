@@ -9,7 +9,7 @@ Fetches the last `hours` of RealEarth's hourly global infrared composite
 watermark), lays each hour out as an equirectangular image, puts its
 clouds (brighter = colder) white over the cloud-free Blue Marble, and cuts
 the faces the boards show. --boards gives each board's face and turn in
-board order (face:turn, as lt7680_multi's x,n,r), so the pixels come out in
+board order (face:turn, as lt7680_multi's #f<x>,<n>,<r>), so the pixels come out in
 the order the panel shows them. Writes b<board>-<frame>.bin (RGB565, little
 endian, 480x480) and a contact sheet; the caps beyond 85 degrees take the
 mean colour of the 85-degree ring. The same stretch is used for every hour,

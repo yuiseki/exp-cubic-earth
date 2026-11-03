@@ -9,7 +9,7 @@
 // LCM_SDO (MISO) の共有は、非選択の LT7680 が SDO をハイインピーダンスにする場合だけ成立する (2 枚では成立を確認)
 //
 // 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、s<k> microSD のシーン k、N 全基板に白地の名前 (基板 0〜2 = A〜C) と辺の番号 (上から時計回りに 1〜4)、K/W 黒/白、r 状態、b バックライト (b0 消す、b1 点ける、b だけなら切り替え)、i<分> 何もしないときにバックライトを消すまでの分 (USB ホストにつながっているときだけ、0 で消さない)
-// 面の割り当て (先頭の '#' は無くてよい): x,n[,r] で基板 x に面 n (0-5) を、時計回りに 90 度 x r (0-3) 回して描く。不揮発領域に保存し、再起動後も使う
+// 面の割り当て: #f<x>,<n>[,<r>] で基板 x に面 n (0-5) を、時計回りに 90 度 x r (0-3) 回して描く。不揮発領域に保存し、再起動後も使う
 
 #include "earth_qsc480x6.h"
 #include "rotate.h"
@@ -37,9 +37,9 @@
 // QSC の面: 0〜3 は側面 (面 0 は東京 139.767 度を中心に、経度 90 度おきに東へ)、4 は北極、5 は南極。
 // 立方体の外から見て、面 k+1 は面 k の右隣、北極は面 0 の上、南極は面 0 の下につながる
 #define NUM_FACES 6
-// 基板ごとの面。既定は基板 b に側面 b、x,n 命令で変えて不揮発領域 ("cube" の "f<b>") に保存する
+// 基板ごとの面。既定は基板 b に側面 b、#f 命令で変えて不揮発領域 ("cube" の "f<b>") に保存する
 int faceOf[NUM_BOARDS];
-// 基板ごとの回転 (時計回りに 90 度 x r、パネルを表から見て)。x,n,r 命令で変えて "r<b>" に保存する
+// 基板ごとの回転 (時計回りに 90 度 x r、パネルを表から見て)。#f 命令で変えて "r<b>" に保存する
 int rotOf[NUM_BOARDS];
 QscFaces qsc;  // 地球の面への投影 (setup で初期化)
 bool windowFull = true;  // 作業ウィンドウが全面か。drawRegion は狭めたままにし、fillRect の前に戻す
@@ -1578,7 +1578,7 @@ void loadFaces() {
   prefs.end();
 }
 
-// x,n[,r] の x を読んだあと: ',' が来れば面番号 (と回転) を読んで割り当てる。来なければ false
+// #f<x>,<n>[,<r>] の x を読んだあと: ',' が来れば面番号 (と回転) を読んで割り当てる。来なければ false
 bool assignFace(int x) {
   uint32_t t = millis();
   while (!cmdIn.available() && millis() - t < 50) delay(1);
@@ -1616,8 +1616,16 @@ void loop() {
   char c = cmdIn.read();
   idleWake();
   if (c == '#') { armed = true; return; }
-  if (c >= '0' && c <= '9' && assignFace(c - '0')) { armed = false; return; }  // x,n (# の有無を問わない)
-  if (!armed) return;
+  if (!armed) {
+    // 割り当ては #f だけ。以前は # 無しの x,n,r も受けていたため、別の命令が崩れた残り (#w200,1 の # が
+    // 落ちた 200,1 など) で割り当てが書き換わった (2026-11-03)。数字の次がカンマなら、無視したことを知らせる
+    if (c >= '0' && c <= '9') {
+      uint32_t t = millis();
+      while (!cmdIn.available() && millis() - t < 50) delay(1);
+      if (cmdIn.peek() == ',') Serial.println("assign: ignored, use #f<board>,<face>[,<turn>]");
+    }
+    return;
+  }
   armed = false;
   switch (c) {
     case '0': case '1': case '2':
@@ -1660,7 +1668,7 @@ void loop() {
       break;
     }
     case 'C': cardTest(cmdIn.parseInt()); break;  // #C[<MHz>] microSD (Sense の拡張ボード) を読み書きして速さを測る
-    case 'N': {  // 面の割り当て用: 全基板を白地にして、名前 A, B, C と辺の番号 1〜4 を描く (face_label.h)。#E や x,n,r で地球に戻る
+    case 'N': {  // 面の割り当て用: 全基板を白地にして、名前 A, B, C と辺の番号 1〜4 を描く (face_label.h)。#E や #f で地球に戻る
       int keep = curBoard;
       for (int b = 0; b < NUM_BOARDS; b++) {
         curBoard = b;
@@ -1697,6 +1705,13 @@ void loop() {
     }
     case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.printf("cmd K: board %d black\n", curBoard); break;
     case 'W': fillRect(0, 0, 479, 479, 0xFFFF); Serial.printf("cmd W: board %d white\n", curBoard); break;
+    case 'f': {  // #f<基板>,<面>[,<回転>] 面の割り当て (不揮発領域に保存)
+      uint32_t t = millis();
+      while (!cmdIn.available() && millis() - t < 50) delay(1);
+      int x = cmdIn.read() - '0';
+      if (x < 0 || x > 9 || !assignFace(x)) Serial.println("cmd f: use #f<board>,<face>[,<turn>]");
+      break;
+    }
     case 'b': {  // #b0 消す、#b1 点ける、#b だけなら切り替え (backlight_cmd.h)
       uint32_t t = millis();
       while (!cmdIn.available() && millis() - t < 50) delay(1);  // USB シリアルでは次の文字が遅れて届く

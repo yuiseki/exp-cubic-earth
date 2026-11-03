@@ -83,7 +83,7 @@ XIAO ESP32-S3 は、付属のアンテナを U.FL の端子に挿さないと、
 
 ## microSD のシーン (`#s`、`#e`、`#w`、`host/send_scene.py`)
 
-シーン k は microSD の `/scenes/<k>/face<f>.bin` (f = 0〜5、480x480 RGB565 リトルエンディアン、回転前。`#U` や `host/clouds.py` の `face<f>.bin` と同じ並び)。`#s<k>` で、各基板の面 (`x,n,r` の割り当て) をシーン k から読み、回転を付けて描く。ESP-NOW で送っても同じ。
+シーン k は microSD の `/scenes/<k>/face<f>.bin` (f = 0〜5、480x480 RGB565 リトルエンディアン、回転前。`#U` や `host/clouds.py` の `face<f>.bin` と同じ並び)。`#s<k>` で、各基板の面 (`#f` の割り当て) をシーン k から読み、回転を付けて描く。ESP-NOW で送っても同じ。
 
 ```sh
 # 焼き込みの地球をシーン 0 として書き出す (6 面で約 1.9 秒)
@@ -122,9 +122,9 @@ ISS の軌跡は描いた時刻のもので、動かない。ESP-NOW で `#s2` �
 
 立方体の外から見て、面 k+1 は面 k の右隣 (面 3 の右は面 0)、北極は面 0 の上、南極は面 0 の下につながる。
 
-基板ごとの面は、シリアルに `x,n` (改行で終わる、先頭の `#` は有っても無くてもよい) を送ると変わる。基板 x に面 n を割り当ててすぐ描き、XIAO の不揮発領域 (Preferences の名前空間 `cube`、キー `f<x>`) に保存するので、再起動後もその面で起動する。保存が無ければ基板 b に面 b。起動ログの `diag: board b lt7680 OK, face n` で今の割り当てが分かる。
+基板ごとの面は、シリアルか ESP-NOW で `#f<x>,<n>` (改行で終わる) を送ると変わる。2026-11-03 までは `#` 無しの `x,n` も受けていたが、別の命令が崩れた残り (`#w200,1` の `#` が落ちたもの) で割り当てが書き換わったので、`#f` だけにした (`#` 無しの `x,n` は「ignored」と出して無視する)。基板 x に面 n を割り当ててすぐ描き、XIAO の不揮発領域 (Preferences の名前空間 `cube`、キー `f<x>`) に保存するので、再起動後もその面で起動する。保存が無ければ基板 b に面 b。起動ログの `diag: board b lt7680 OK, face n` で今の割り当てが分かる。
 
-面の画像は回して映せる。`x,n,r` と送ると、基板 x に面 n を時計回りに 90 度 x r (0〜3、パネルを表から見て) 回して描き、回転も `r<x>` に保存する。`x,n` だけなら回転は今のまま。起動ログは `face n, turn r`。立方体の配置ごとの n と r は `simulate/` の `geometry.earth_turns` が出す (画像の上の行がパネルの上の辺、FPC と反対の辺に映ると仮定。違えば全部の r が同じだけずれる)。回転の計算は `test/test_rotate.cpp` (`g++ -std=c++17 -o /tmp/test_rotate test/test_rotate.cpp && /tmp/test_rotate`)。
+面の画像は回して映せる。`#f<x>,<n>,<r>` と送ると、基板 x に面 n を時計回りに 90 度 x r (0〜3、パネルを表から見て) 回して描き、回転も `r<x>` に保存する。`#f<x>,<n>` だけなら回転は今のまま。起動ログは `face n, turn r`。立方体の配置ごとの n と r は `simulate/` の `geometry.earth_turns` が出す (画像の上の行がパネルの上の辺、FPC と反対の辺に映ると仮定。違えば全部の r が同じだけずれる)。回転の計算は `test/test_rotate.cpp` (`g++ -std=c++17 -o /tmp/test_rotate test/test_rotate.cpp && /tmp/test_rotate`)。
 
 生成は `lt7680_earth/make_qsc_faces.py`:
 

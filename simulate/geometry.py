@@ -221,7 +221,7 @@ EARTH_FACE = earth_faces()
 
 def earth_turns(plan, face0="A"):
     """For each face, (QSC face, r): turn that face's image r quarter turns
-    clockwise (lt7680_multi's x,n,r) so it joins its neighbours, with QSC
+    clockwise (lt7680_multi's #f<x>,<n>,<r>) so it joins its neighbours, with QSC
     face 0 on `face0`. Assumes the image's top row is shown along the
     panel's top edge (away from the FPC edge), not mirrored; if not, every
     r is off by the same amount."""
