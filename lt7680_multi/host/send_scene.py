@@ -17,20 +17,21 @@ import serial
 from send_faces import CHUNK, SIZE, wait_for
 
 
-BOOT_MARKS = (b"ESP-ROM", b"rst:")
-
-
-def settle(port):
-    """After opening the port: if the XIAO is booting (opening it can reset it, as on pi4-deck
-    2026-10-29), wait for "shell ready" so the first #w is not lost. True if it had reset."""
-    time.sleep(1.0)
-    buf = port.read(port.in_waiting) if port.in_waiting else b""
-    if not any(m in buf for m in BOOT_MARKS):
-        return False
-    if b"shell ready" not in buf:
-        buf += wait_for(port, "shell ready", 15)
-    print("the XIAO reset when the port opened; waited for its shell")
-    return True
+def wait_ready(port, timeout=20):
+    """Send "#r" every 2 s until the shell answers "cmd r:". A XIAO just plugged in (or reset by
+    opening the port, as on pi4-deck 2026-10-29) is still booting, and a #w sent then loses its
+    "#" so the rest reads as a face assignment (2026-11-03). True once it answers."""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        port.reset_input_buffer()
+        port.write(b"#r\n")
+        buf, t1 = b"", time.time()
+        while time.time() - t1 < 2:
+            buf += port.read(port.in_waiting or 1)
+            if b"cmd r:" in buf:
+                return True
+        time.sleep(0.5)
+    return False
 
 
 def open_port(path):
@@ -41,7 +42,8 @@ def open_port(path):
         termios.tcsetattr(port.fd, termios.TCSANOW, attrs)
     except termios.error:
         pass
-    settle(port)
+    if not wait_ready(port):
+        raise SystemExit("the XIAO shell did not answer #r")
     return port
 
 
