@@ -8,7 +8,11 @@ Each module is name=face:turn for boards A, B, C (the faces and turns lt7680_mul
 #j draws the image on the panel as it is. Put them in the web directory and send #j to each module.
 - Day and night: scene_compose.py (Blue Marble, Black Marble, the sun's position for --time, default now)
 - Clouds: the newest hour of SSEC RealEarth's global infrared (clouds_hourly.py; "Source: SSEC RealEarth,
-  UW-Madison"), stretched between its 40th and 97th percentile, white by day and dim grey by night
+  UW-Madison"), stretched between its 40th and 97th percentile, white by day and dim grey by night.
+  One global 1024x512 image, 0.35 degrees a pixel (a face is 0.19). Finer did not work: bounded images
+  of 1024x2048 and the zoom-3 map tiles (0.18 degrees) both came back with "Size limit exceeded" written
+  across them after a few requests (2026-11-03), so RealEarth limits how much one client asks for in a
+  while, whatever the size. 721 hourly global images fetched 0.5 s apart had none
 """
 import argparse
 import datetime as dt
