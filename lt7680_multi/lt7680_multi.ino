@@ -8,7 +8,7 @@
 // 共有線: LCM_SDI/SDO/SCLK (D10/D9/D8)、LCD_DIN/LCD_SCLK (D5/D4)、LCM_RESET (D1)、BL (D3)
 // LCM_SDO (MISO) の共有は、非選択の LT7680 が SDO をハイインピーダンスにする場合だけ成立する (2 枚では成立を確認)
 //
-// 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、s<k> microSD のシーン k、N 全基板に白地の名前 (基板 0〜2 = A〜C) と辺の番号 (上から時計回りに 1〜4)、K/W 黒/白、r 状態、b バックライト、i<分> 何もしないときにバックライトを消すまでの分 (USB ホストにつながっているときだけ、0 で消さない)
+// 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、s<k> microSD のシーン k、N 全基板に白地の名前 (基板 0〜2 = A〜C) と辺の番号 (上から時計回りに 1〜4)、K/W 黒/白、r 状態、b バックライト (b0 消す、b1 点ける、b だけなら切り替え)、i<分> 何もしないときにバックライトを消すまでの分 (USB ホストにつながっているときだけ、0 で消さない)
 // 面の割り当て (先頭の '#' は無くてよい): x,n[,r] で基板 x に面 n (0-5) を、時計回りに 90 度 x r (0-3) 回して描く。不揮発領域に保存し、再起動後も使う
 
 #include "earth_qsc480x6.h"
@@ -28,6 +28,7 @@
 #include "byte_ring.h"
 #include "reg_verify.h"
 #include "idle_backlight.h"
+#include "backlight_cmd.h"
 
 #ifndef NUM_BOARDS
 #define NUM_BOARDS 1
@@ -1696,7 +1697,16 @@ void loop() {
     }
     case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.printf("cmd K: board %d black\n", curBoard); break;
     case 'W': fillRect(0, 0, 479, 479, 0xFFFF); Serial.printf("cmd W: board %d white\n", curBoard); break;
-    case 'b': bl = !bl; applyBacklight(); Serial.printf("cmd b: backlight %s\n", bl ? "on" : "off"); break;
+    case 'b': {  // #b0 消す、#b1 点ける、#b だけなら切り替え (backlight_cmd.h)
+      uint32_t t = millis();
+      while (!cmdIn.available() && millis() - t < 50) delay(1);  // USB シリアルでは次の文字が遅れて届く
+      int next = cmdIn.available() ? cmdIn.peek() : -1;
+      if (takesArg(next)) cmdIn.read();
+      bl = backlightAfter(bl, next);
+      applyBacklight();
+      Serial.printf("cmd b: backlight %s\n", bl ? "on" : "off");
+      break;
+    }
     case 'i': {  // #i<分> 何もしないときにバックライトを消すまで (USB ホストがいるときだけ、0 で消さない)。#i だけなら今の値
       if (!isdigit(cmdIn.peek())) { Serial.printf("cmd i: %lu min, host %s\n", (unsigned long)(idleBl.timeoutMs / 60000), idleBl.hostConnected(millis()) ? "attached" : "absent"); break; }
       long m = cmdIn.parseInt();
