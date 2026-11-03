@@ -1653,6 +1653,9 @@ void fetchSides() {
   for (int b = 0; b < NUM_BOARDS; b++) {
     char url[192];
     if (!sideUrl(url, sizeof url, WEB_BASE, nm.c_str(), b)) { Serial.println("cmd j: url too long"); break; }
+    // 同じ名前で差し替えた画像を、Cloudflare のキャッシュが古いまま返さないように、毎回違う問い合わせを付ける
+    size_t ul = strlen(url);
+    snprintf(url + ul, sizeof url - ul, "?t=%lu", (unsigned long)millis());
     curBoard = b;
     fetchSide(url);
   }

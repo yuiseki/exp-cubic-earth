@@ -90,7 +90,7 @@ XIAO ESP32-S3 は、付属のアンテナを U.FL の端子に挿さないと、
 #j        # https://z.yuiseki.net/static/tmp/cubic-earth/<名前>-side-a.jpg、-b、-c を取って、基板 A、B、C に描く
 ```
 
-画像は 480x480 の JPEG (512KB まで)。面の回転は使わず、パネルにそのまま描く (画像の上がパネルの上)。取りに行く先は `WEB_BASE` で変えられる。HTTPS の証明書は確かめていない (`setInsecure`)。展開は JPEGDEC (bitbank、Apache-2.0、1.8.5、`arduino-cli lib install JPEGDEC`)。純粋な部分 (URL、名前、AP の順番) は `web_faces.h`、`test/test_web_faces.cpp`。
+画像は 480x480 の JPEG (512KB まで)。面の回転は使わず、パネルにそのまま描く (画像の上がパネルの上)。取りに行く先は `WEB_BASE` で変えられる。Cloudflare のキャッシュが差し替える前の画像を返さないよう、URL に毎回 `?t=<millis>` を付ける。HTTPS の証明書は確かめていない (`setInsecure`)。展開は JPEGDEC (bitbank、Apache-2.0、1.8.5、`arduino-cli lib install JPEGDEC`)。純粋な部分 (URL、名前、AP の順番) は `web_faces.h`、`test/test_web_faces.cpp`。
 
 ## microSD のシーン (`#s`、`#e`、`#w`、`host/send_scene.py`)
 
