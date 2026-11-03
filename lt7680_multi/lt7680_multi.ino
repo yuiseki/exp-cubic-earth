@@ -26,6 +26,7 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include "byte_ring.h"
+#include "reg_verify.h"
 
 #ifndef NUM_BOARDS
 #define NUM_BOARDS 1
@@ -909,6 +910,8 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
 
   int front = 0;
   uint32_t t0 = millis(), frames = 0, busy = 0, worst = 0, shown = 0, nearEdge = 0;
+  uint32_t checks = 0, badRegs[NUM_BOARDS] = {}, firstBad[NUM_BOARDS] = {};
+  int printed = 0;
   while (millis() - t0 < (uint32_t)seconds * 1000) {
     uint32_t f0 = micros();
     int back = 1 - front;
@@ -974,6 +977,19 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
     }
     front = back;
     frames++;
+    if (frames % 30 == 0) {  // 1 秒ごとに、各基板のレジスタを読み返す (reg_verify.h)
+      checks++;
+      for (int b = 0; b < NUM_BOARDS; b++) {
+        curBoard = b;
+        RegExpect e[REG_VERIFY_MAX];
+        int n = cacheExpect(e, gExpect(e, pageAddr(front)), regCache[b], 0x93, 0xB4);
+        int bad = verifyRegs(e, n, readReg, [&](uint8_t r, uint8_t want, uint8_t got, uint8_t again) {
+          if (printed++ < 40) Serial.printf("verify: %lu ms board %d REG[%02Xh] %02X, again %02X, want %02X\n", (unsigned long)(millis() - t0), b, r, got, again, want);
+        });
+        if (bad && !badRegs[b]) firstBad[b] = millis() - t0;
+        badRegs[b] += bad;
+      }
+    }
     uint32_t spent = micros() - f0;
     busy += spent;
     worst = max(worst, spent);
@@ -988,6 +1004,9 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
   regCacheClear();
   curBoard = keep;
   free(m);
+  Serial.printf("cmd G: verify %lu checks", (unsigned long)checks);
+  for (int b = 0; b < NUM_BOARDS; b++) Serial.printf(", board %d %lu bad (first %lu ms)", b, (unsigned long)badRegs[b], (unsigned long)firstBad[b]);
+  Serial.println();
   Serial.printf("cmd G: drawn %lu times, %.1f%% within 8 px of the panel edge\n", (unsigned long)shown, 100.0 * nearEdge / (shown ? shown : 1));
   Serial.printf("cmd G: %s, %d movers%s, %lu frames in %d s, work %.1f ms/frame (worst %.1f), %.0f fps if not held to 30\n", vsync ? "vsync" : "no vsync", N,
                 labels ? " with labels" : "", (unsigned long)frames, seconds, busy / 1000.0 / frames, worst / 1000.0, frames * 1e6 / busy);
