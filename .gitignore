@@ -1,2 +1,4 @@
 tmp/
 build/
+**/secrets.h
+__pycache__/

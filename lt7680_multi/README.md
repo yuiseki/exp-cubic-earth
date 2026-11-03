@@ -81,6 +81,17 @@ pi5-deck に中継の XIAO (68:EE:8F:4B:1E:84) を挿し、`#N`、`#r`、`x,n,r`
 
 XIAO ESP32-S3 は、付属のアンテナを U.FL の端子に挿さないと、電波がほとんど飛ばない。アンテナ無しでは、周りのアクセスポイントが -80〜-95 dBm でしか見えず、ESP-NOW は近くに置いたときだけたまに届いた (ユニキャストの ACK はどちら向きも返らなかった)。2 台に付けると -50 dBm 前後になり、10 回中 10 回届いた。切り分けの命令: `#a` 周りの Wi-Fi を探して受信の強さを出す、`#p` ESP-NOW で ping を一斉送信 (中継に `rx` と出る)、`#r` に受けた ESP-NOW の数も出る。
 
+## Wi-Fi と Web の画像 (`#j`、`#m`、`secrets.h`)
+
+起動時に `secrets.h` (gitignore 済み、`secrets.h.example` を写して書く) の `WIFI_APS` の AP につなぐ。スキャンで見えた AP を並び順に試し、1 つも見えなければ全部を並び順に試す (隠し SSID)。中継の `../espnow_bridge` も同じ並びでつなぐので、ESP-NOW はその AP のチャンネルにそろう (expt-the-map-runs と同じ形)。自宅の AP と展示用のスマホのテザリングのように、複数書いておく。どれにもつながらなければ、ESP-NOW だけをチャンネル 1 (`ESPNOW_CHANNEL`) で使う。
+
+```sh
+#mnorth   # モジュール名を NVS に (north / south など、小文字・数字・- の 1〜15 文字)。#m だけなら今の名前
+#j        # https://z.yuiseki.net/static/tmp/cubic-earth/<名前>-side-a.jpg、-b、-c を取って、基板 A、B、C に描く
+```
+
+画像は 480x480 の JPEG (512KB まで)。面の回転は使わず、パネルにそのまま描く (画像の上がパネルの上)。取りに行く先は `WEB_BASE` で変えられる。HTTPS の証明書は確かめていない (`setInsecure`)。展開は JPEGDEC (bitbank、Apache-2.0、1.8.5、`arduino-cli lib install JPEGDEC`)。純粋な部分 (URL、名前、AP の順番) は `web_faces.h`、`test/test_web_faces.cpp`。
+
 ## microSD のシーン (`#s`、`#e`、`#w`、`host/send_scene.py`)
 
 シーン k は microSD の `/scenes/<k>/face<f>.bin` (f = 0〜5、480x480 RGB565 リトルエンディアン、回転前。`#U` や `host/clouds.py` の `face<f>.bin` と同じ並び)。`#s<k>` で、各基板の面 (`#f` の割り当て) をシーン k から読み、回転を付けて描く。ESP-NOW で送っても同じ。

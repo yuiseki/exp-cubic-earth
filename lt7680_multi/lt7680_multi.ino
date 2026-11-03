@@ -8,7 +8,7 @@
 // 共有線: LCM_SDI/SDO/SCLK (D10/D9/D8)、LCD_DIN/LCD_SCLK (D5/D4)、LCM_RESET (D1)、BL (D3)
 // LCM_SDO (MISO) の共有は、非選択の LT7680 が SDO をハイインピーダンスにする場合だけ成立する (2 枚では成立を確認)
 //
-// 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、s<k> microSD のシーン k、N 全基板に白地の名前 (基板 0〜2 = A〜C) と辺の番号 (上から時計回りに 1〜4)、K/W 黒/白、r 状態、b バックライト (b0 消す、b1 点ける、b だけなら切り替え)、i<分> 何もしないときにバックライトを消すまでの分 (USB ホストにつながっているときだけ、0 で消さない)
+// 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、s<k> microSD のシーン k、N 全基板に白地の名前 (基板 0〜2 = A〜C) と辺の番号 (上から時計回りに 1〜4)、K/W 黒/白、m<名前> モジュール名、j Web の <名前>-side-a〜c.jpg を描く、r 状態、b バックライト (b0 消す、b1 点ける、b だけなら切り替え)、i<分> 何もしないときにバックライトを消すまでの分 (USB ホストにつながっているときだけ、0 で消さない)
 // 面の割り当て: #f<x>,<n>[,<r>] で基板 x に面 n (0-5) を、時計回りに 90 度 x r (0-3) 回して描く。不揮発領域に保存し、再起動後も使う
 
 #include "earth_qsc480x6.h"
@@ -29,6 +29,13 @@
 #include "reg_verify.h"
 #include "idle_backlight.h"
 #include "backlight_cmd.h"
+#include "web_faces.h"
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <JPEGDEC.h>
+#if __has_include("secrets.h")
+#include "secrets.h"  // WIFI_APS。secrets.h.example を参照 (gitignore 済み)
+#endif
 
 #ifndef NUM_BOARDS
 #define NUM_BOARDS 1
@@ -1514,9 +1521,44 @@ class CmdIn : public Stream {
   size_t write(uint8_t b) override { return Serial.write(b); }
 } cmdIn;
 
+// 起動時に secrets.h の AP につなぐ (web_faces.h の apOrder)。中継 (espnow_bridge) も同じ並びで同じ AP につなぐので、
+// ESP-NOW はその AP のチャンネルにそろう。つながっていれば #j で Web の画像を取れる。expt-the-map-runs と同じ形
+bool joinWiFi() {
+#ifdef WIFI_APS
+  struct Ap { const char *ssid, *pass; };
+  static const Ap aps[] = WIFI_APS;
+  const int nAps = sizeof aps / sizeof aps[0];
+  const char *names[8];
+  for (int a = 0; a < nAps && a < 8; a++) names[a] = aps[a].ssid;
+  int n = WiFi.scanNetworks();
+  static String seenStr[32];
+  const char *seen[32];
+  int nSeen = 0;
+  for (int i = 0; i < n && nSeen < 32; i++) { seenStr[nSeen] = WiFi.SSID(i); seen[nSeen] = seenStr[nSeen].c_str(); nSeen++; }
+  int order[8];
+  int k = apOrder(names, nAps < 8 ? nAps : 8, seen, nSeen, order);
+  WiFi.scanDelete();
+  for (int i = 0; i < k; i++) {
+    WiFi.begin(aps[order[i]].ssid, aps[order[i]].pass);
+    uint32_t t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 8000) delay(100);
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("wifi: %s, channel %d, %s\n", aps[order[i]].ssid, WiFi.channel(), WiFi.localIP().toString().c_str());
+      return true;
+    }
+    WiFi.disconnect();
+  }
+  Serial.println("wifi: no AP from secrets.h joined");
+#else
+  Serial.println("wifi: no secrets.h (see secrets.h.example)");
+#endif
+  return false;
+}
+
 void setupEspnow() {
   WiFi.mode(WIFI_STA);
-  esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  WiFi.setSleep(false);  // ESP-NOW の取りこぼしを防ぐ (expt-the-map-runs)
+  if (!joinWiFi()) esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
   if (esp_now_init() != ESP_OK) { Serial.println("espnow: init failed"); return; }
   esp_now_register_recv_cb(onEspnowRecv);
   uint8_t m[6];
@@ -1524,7 +1566,97 @@ void setupEspnow() {
   uint8_t ch = 0;
   wifi_second_chan_t ch2;
   esp_wifi_get_channel(&ch, &ch2);
-  Serial.printf("espnow: %02X:%02X:%02X:%02X:%02X:%02X, channel %d (asked %d)\n", m[0], m[1], m[2], m[3], m[4], m[5], ch, ESPNOW_CHANNEL);
+  Serial.printf("espnow: %02X:%02X:%02X:%02X:%02X:%02X, channel %d (%s)\n", m[0], m[1], m[2], m[3], m[4], m[5], ch, WiFi.status() == WL_CONNECTED ? "the AP's" : "ESPNOW_CHANNEL");
+}
+
+// ---- #j: Web に置いた JPEG を取って描く ----
+#ifndef WEB_BASE
+#define WEB_BASE "https://z.yuiseki.net/static/tmp/cubic-earth"
+#endif
+String moduleName() {
+  prefs.begin("cube", true);
+  String nm = prefs.getString("name", "");
+  prefs.end();
+  return nm;
+}
+
+static uint16_t *jpegOut = nullptr;  // 480x480 RGB565 (PSRAM)
+int jpegDraw(JPEGDRAW *d) {
+  for (int y = 0; y < d->iHeight; y++) {
+    int yy = d->y + y;
+    if (yy < 0 || yy >= 480) continue;
+    for (int x = 0; x < d->iWidth; x++) {
+      int xx = d->x + x;
+      if (xx >= 0 && xx < 480) jpegOut[yy * 480 + xx] = d->pPixels[y * d->iWidth + x];
+    }
+  }
+  return 1;
+}
+
+// 1 枚: GET して PSRAM に置き、展開して、選んだ基板にそのまま (回転なしで) 描く。画像は 480x480 の JPEG
+bool fetchSide(const char *url) {
+  static const size_t MAX_JPEG = 512 * 1024;
+  static uint8_t *jpg = nullptr;
+  if (!jpg) jpg = (uint8_t *)ps_malloc(MAX_JPEG);
+  if (!jpegOut) jpegOut = (uint16_t *)ps_malloc(480 * 480 * 2);
+  if (!jpg || !jpegOut) { Serial.println("cmd j: no PSRAM"); return false; }
+  uint32_t t0 = millis();
+  WiFiClientSecure tls;
+  tls.setInsecure();  // 証明書は確かめない (画像を取るだけ。CA の束を載せるのは後で)
+  HTTPClient http;
+  bool https = strncmp(url, "https:", 6) == 0;
+  WiFiClient plain;
+  if (!(https ? http.begin(tls, url) : http.begin(plain, url))) { Serial.printf("cmd j: bad url %s\n", url); return false; }
+  int code = http.GET();
+  if (code != 200) { Serial.printf("cmd j: %s -> HTTP %d\n", url, code); http.end(); return false; }
+  int len = http.getSize();  // -1: 長さを言わない (chunked) ので、閉じられるまで読む
+  if ((size_t)len > MAX_JPEG && len > 0) { Serial.printf("cmd j: %s size %d (max %u)\n", url, len, (unsigned)MAX_JPEG); http.end(); return false; }
+  int want = len > 0 ? len : (int)MAX_JPEG;
+  int got = 0;
+  NetworkClient *st = http.getStreamPtr();
+  uint32_t t1 = millis();
+  while (got < want && millis() - t1 < 20000 && (http.connected() || st->available())) {
+    int a = st->available();
+    if (a > 0) got += st->readBytes(jpg + got, min(a, want - got));
+    else delay(2);
+  }
+  http.end();
+  if (len > 0 && got != len) { Serial.printf("cmd j: %s got %d of %d bytes\n", url, got, len); return false; }
+  if (len <= 0 && got >= (int)MAX_JPEG) { Serial.printf("cmd j: %s bigger than %u bytes\n", url, (unsigned)MAX_JPEG); return false; }
+  len = got;
+  uint32_t t2 = millis();
+  static JPEGDEC dec;
+  if (!dec.openRAM(jpg, len, jpegDraw)) { Serial.printf("cmd j: %s is not a JPEG it can decode\n", url); return false; }
+  if (dec.getWidth() != 480 || dec.getHeight() != 480) {
+    Serial.printf("cmd j: %s is %dx%d, needs 480x480\n", url, dec.getWidth(), dec.getHeight());
+    dec.close();
+    return false;
+  }
+  dec.setPixelType(RGB565_LITTLE_ENDIAN);
+  bool ok = dec.decode(0, 0, 0);
+  dec.close();
+  if (!ok) { Serial.printf("cmd j: %s decode failed\n", url); return false; }
+  uint32_t t3 = millis();
+  drawToPage(0);
+  showPage(0);
+  streamPixels(0, 0, 480, 480, [](int x, int y) { return jpegOut[y * 480 + x]; });
+  Serial.printf("board %d: %s %d bytes, fetch %lu ms, decode %lu ms, draw %lu ms\n", curBoard, url, len,
+                (unsigned long)(t2 - t0), (unsigned long)(t3 - t2), (unsigned long)(millis() - t3));
+  return true;
+}
+
+void fetchSides() {
+  if (WiFi.status() != WL_CONNECTED) { Serial.println("cmd j: not on Wi-Fi (secrets.h, or no AP seen at boot)"); return; }
+  String nm = moduleName();
+  if (nm.length() == 0) { Serial.println("cmd j: no module name, set it with #m<name>"); return; }
+  int keep = curBoard;
+  for (int b = 0; b < NUM_BOARDS; b++) {
+    char url[192];
+    if (!sideUrl(url, sizeof url, WEB_BASE, nm.c_str(), b)) { Serial.println("cmd j: url too long"); break; }
+    curBoard = b;
+    fetchSide(url);
+  }
+  curBoard = keep;
 }
 
 bool armed = false;
@@ -1645,7 +1777,7 @@ void loop() {
       if (!esp_now_is_peer_exist(bc)) {
         esp_now_peer_info_t peer = {};
         memcpy(peer.peer_addr, bc, 6);
-        peer.channel = ESPNOW_CHANNEL;
+        peer.channel = 0;  // 今のチャンネル (つないだ AP のもの) に相乗り
         esp_now_add_peer(&peer);
       }
       const char msg[] = "ping from the cube";
@@ -1657,7 +1789,7 @@ void loop() {
         Serial.printf("%s %d access points\n", "scan:", n);
         for (int i = 0; i < n && i < 8; i++) Serial.printf("%s   ch %d rssi %d %s\n", "scan:", WiFi.channel(i), WiFi.RSSI(i), WiFi.SSID(i).c_str());
         WiFi.scanDelete();
-        esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+        if (WiFi.status() != WL_CONNECTED) esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
       } break;  // #a 周りの Wi-Fi を探して受信の強さを出す (無線とアンテナの確認)
     case 's': showScene(cmdIn.parseInt()); break;  // #s<k> シーン k (microSD) を全基板に描く
     case 'e': exportEarth(cmdIn.parseInt()); break;  // #e<k> 焼き込みの地球をシーン k として microSD に書く
@@ -1705,6 +1837,18 @@ void loop() {
     }
     case 'K': fillRect(0, 0, 479, 479, 0x0000); Serial.printf("cmd K: board %d black\n", curBoard); break;
     case 'W': fillRect(0, 0, 479, 479, 0xFFFF); Serial.printf("cmd W: board %d white\n", curBoard); break;
+    case 'm': {  // #m<名前> モジュール名 (north / south など、#j のファイル名の頭)。NVS の "name"。#m だけなら今の名前
+      String nm = cmdIn.readStringUntil('\n');
+      nm.trim();
+      if (nm.length() == 0) { Serial.printf("cmd m: %s\n", moduleName().c_str()); break; }
+      if (!moduleNameOk(nm.c_str())) { Serial.println("cmd m: error, a-z 0-9 - (1-15)"); break; }
+      prefs.begin("cube", false);
+      prefs.putString("name", nm);
+      prefs.end();
+      Serial.printf("cmd m: %s (saved)\n", nm.c_str());
+      break;
+    }
+    case 'j': fetchSides(); break;  // #j Web の <WEB_BASE>/<名前>-side-a〜c.jpg を取って A〜C に描く
     case 'f': {  // #f<基板>,<面>[,<回転>] 面の割り当て (不揮発領域に保存)
       uint32_t t = millis();
       while (!cmdIn.available() && millis() - t < 50) delay(1);

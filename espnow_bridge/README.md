@@ -3,6 +3,7 @@
 USB シリアルで受けた 1 行 (改行まで、最大 250 バイト) を、ESP-NOW (チャンネル 1) でブロードキャストする中継。受け手は `../lt7680_multi` で、届いた行をシリアルに打った命令と同じに扱う。2 つのモジュールに同じ命令を同時に送れる。
 
 ```sh
+cp secrets.h.example secrets.h   # lt7680_multi と同じ AP の並びを書く
 arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3 --output-dir build espnow_bridge
 esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset write-flash 0x0 build/espnow_bridge.ino.merged.bin
 ```
