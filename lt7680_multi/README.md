@@ -125,19 +125,22 @@ ISS の軌跡は描いた時刻のもので、動かない。ESP-NOW で `#s2` �
 
 3 枚の切り替えは約 2.7 秒 (1 枚ごとに microSD から面を読んで約 0.3 秒、描いて約 0.6 秒)。シーン 0 (地球) と 1 (2026-10-19 の雲) を、ESP-NOW で 3 回切り替えて 3 回とも 3 枚に描けた (2026-10-28)。
 
-## 本物の飛行機の 1 日 (`#t`、`#J`、`flights/`)
+## 本物の飛行機と船の 1 日 (`#t`、`#J`、`flights/`)
 
-`#G` と同じダブルバッファで、架空の飛行機の代わりに、ある 1 日の定期便を動かす。背景は今の面 (シーンを出していればシーンの画像)。
+`#G` と同じダブルバッファで、架空の飛行機と船の代わりに、ある 1 日の定期便と船を動かす。背景は今の面 (シーンを出していればシーンの画像)。
 
 ```
 #t60        # microSD の /flights/day.bin を 60 秒、1 日を 120 秒で回して動かす (初回だけ PSRAM へ読む)
 #t300,600   # 300 秒、1 日を 600 秒で
-#J          # <WEB_BASE>/flights.bin を取って microSD の /flights/day.bin を差し替え、読み直す
+#t60,120,0  # 船を出さない
+#J          # <WEB_BASE>/flights.bin と ships.bin を取って microSD の /flights/day.bin と ships.bin を差し替え、読み直す
 ```
 
 ふだんは microSD から読み、`#J` を送ったときだけ Web から取って microSD を書き換える。Wi-Fi が無い会場でも、前に取った日が動く。`#J` は day.tmp に書いてから、形と長さ (`flight_track.h` の先頭と一致するか) を確かめて day.bin と入れ替えるので、途中で切れても前の日が残る。ESP-NOW で両モジュールに送れる。
 
 ファイルは全球の便を持ち、モジュールは自分の面に載る分だけ描く (どの面かは `#G` と同じ QSC の投影)。15 分ごとのキーフレームの間は、モジュールが緯度経度のまま直線で補う (`flight_track.h`、`test/test_flight_track.cpp`)。全機が同じ印 (黄色い十字、7 画素) を使い、ラベルは出さない (数千機ぶんのスプライトはページに収まらない)。
+
+船は `/flights/ships.bin` (形は飛行機と同じ、1 時間ごとのキーフレーム) から読み、白い点 (5 画素) で飛行機と同じ時計で動かす。ships.bin が無ければ飛行機だけ動かす。
 
 作り方 (母艦):
 
@@ -149,6 +152,10 @@ cp flights.bin /sata_hdd_24tb/www/html/static/tmp/cubic-earth/                  
 ```
 
 毎日の分は `flights/daily_adsblol.py` が、前日 (UTC) の分を落として抜き出し、`flights-<日付>.bin` と `flights.bin` を Web に置く (abeat の adsblol-flights-daily、毎日 15 時。adsb.lol の前日分は 12 時半ごろ出る)。取るのは GitHub のリリースの置き場からで、adsb.lol のサーバーは叩かない。回数の制限があるのはリリースを探す GitHub API (トークン無しで 1 時間 60 回、`x-ratelimit-*` ヘッダー) だけで、1 日 1 回しか呼ばず、残りが少ないか断られたらその回は止めて次の回に回す。約 3.5GB の原本は抜き出したら消し、抜き出し (約 20MB) は `/sata_hdd_24tb/adsblol/snapshots/` に残す。1 日分で約 25 分。
+
+船は `flights/collect_ais.py` が aisstream.io (WebSocket、鍵は `~/Workspaces/.env` の `AISSTREAM_API_KEY`) を毎時 0 分から 5 分だけ全世界で受け、動いている船 (2〜40 ノット、MMSI が 2〜7 で始まる 9 桁) の最新の位置を `/sata_hdd_24tb/ais/<UTC の日>/<時>.json` に残す (abeat の ais-ships-hourly)。船は 1 時間に 0.25 度ほどしか動かず、動いている A 級は 2〜10 秒、B 級は 30 秒ごとに位置を出すので、1 時間に 5 分で足りる。船名と種類 (ShipStaticData) は 6 分おきにしか来ないので、窓をまたいで `static.json` に貯める。受信局は有志の陸上局なので、欧州 (北極の面に入る) に大きく偏り、外洋はまばら。websockets の既定の keepalive ping には aisstream が期限内に返さず、1 分半で切られたので、ping は送らず、切れたら窓の残りでつなぎ直す。
+
+`flights/daily_ships.py` が前日 (UTC) の 24 個の窓を 1 時間ごとのスナップショットにまとめ (窓の無い時間は空のまま残して等間隔を保つ。12 個未満なら出さない)、`pack_flights.py --cap 30` で `ships-<日付>.bin` と `ships.bin` を Web に置く (abeat の ais-ships-daily、毎日 10 時 10 分)。
 
 `--cap` は 1 面の機数の上限。1 機が 1 コマに BTE 2 回 (消すと描く) で、`#G` の測り (162 個で 1 コマ 29.2ms) から、3 面 x 60 機で 30 コマ/秒に収まる見込み。2026-11-03 の分は 65,206 便から 4,890 便、1.9MB。
 
