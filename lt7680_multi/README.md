@@ -148,6 +148,8 @@ python -I flights/pack_flights.py snaps.json flights.bin --cap 60               
 cp flights.bin /sata_hdd_24tb/www/html/static/tmp/cubic-earth/                     # そのあと ESP-NOW で #J
 ```
 
+毎日の分は `flights/daily_adsblol.py` が、前日 (UTC) の分を落として抜き出し、`flights-<日付>.bin` と `flights.bin` を Web に置く (abeat の adsblol-flights-daily、毎日 15 時。adsb.lol の前日分は 12 時半ごろ出る)。取るのは GitHub のリリースの置き場からで、adsb.lol のサーバーは叩かない。回数の制限があるのはリリースを探す GitHub API (トークン無しで 1 時間 60 回、`x-ratelimit-*` ヘッダー) だけで、1 日 1 回しか呼ばず、残りが少ないか断られたらその回は止めて次の回に回す。約 3.5GB の原本は抜き出したら消し、抜き出し (約 20MB) は `/sata_hdd_24tb/adsblol/snapshots/` に残す。1 日分で約 25 分。
+
 `--cap` は 1 面の機数の上限。1 機が 1 コマに BTE 2 回 (消すと描く) で、`#G` の測り (162 個で 1 コマ 29.2ms) から、3 面 x 60 機で 30 コマ/秒に収まる見込み。2026-11-03 の分は 65,206 便から 4,890 便、1.9MB。
 
 
