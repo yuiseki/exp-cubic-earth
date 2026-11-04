@@ -24,6 +24,13 @@ esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset \
   write-flash -z 0x0 build/hc138x2/lt7680_multi.ino.merged.bin
 ```
 
+merged.bin は 0x0 から隙間ごと書くので、NVS (0x9000〜) の設定、面の割り当て (`#f`)、モジュールの名前 (`#m`)、`#i` が消える (2026-11-04、南極側で面がずれて、名前も空になった)。このファームが載っているモジュールを書き換えるときは、アプリだけを 0x10000 に書く:
+
+```sh
+esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset \
+  write-flash -z 0x10000 build/hc138x3/lt7680_multi.ino.bin
+```
+
 旗を付けないと 74HC138 で 1 枚 (`NUM_BOARDS=1`)。
 
 パーティションは `max_app_8MB` (アプリ 7.9MB、OTA なし)。焼き込みの地球 (約 2.8MB) と Wi-Fi/ESP-NOW (約 0.6MB) で、既定のアプリ領域 (3.3MB) に入らない。不揮発領域 (nvs、0x9000) は既定と同じ位置と大きさなので、既定のパーティションから切り替えるときは、パーティション表とアプリだけを焼けば面の割り当てが残る:
