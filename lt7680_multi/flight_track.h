@@ -13,6 +13,12 @@ static const int16_t FT_NONE = INT16_MIN;
 struct FtHeader { uint16_t keys, stepMin; uint32_t t0, flights; };
 struct FlightSet { FtHeader h; uint8_t *data; };  // data はファイル全体 (PSRAM)
 
+// microSD 上のファイルと、PSRAM に読んだ中身 (name は Web 上のファイル名 <name>.bin)
+struct TrackFile {
+  const char *name, *path, *tmp;
+  FlightSet set;
+};
+
 static inline uint32_t ftRecordBytes(const FtHeader &h) { return 8u + 4u * h.keys; }
 static inline uint32_t ftFileBytes(const FtHeader &h) { return FT_HEADER + h.flights * ftRecordBytes(h); }
 

@@ -869,24 +869,27 @@ template <typename F> void streamPixels(int x0, int y0, int w, int h, F px) {
   }
 }
 
-// 本物の 1 日の便 (flight_track.h)。#t の初回か #J のあとに microSD から PSRAM へ読む
-static FlightSet flightSet = {{0, 0, 0, 0}, nullptr};
+// 本物の 1 日の便と船 (flight_track.h、どちらも同じ形)。#t の初回か #J のあとに microSD から PSRAM へ読む
+static TrackFile flightFile = {"flights", "/flights/day.bin", "/flights/day.tmp", {{0, 0, 0, 0}, nullptr}};
+static TrackFile shipFile = {"ships", "/flights/ships.bin", "/flights/ships.tmp", {{0, 0, 0, 0}, nullptr}};
 
 static inline const int16_t *flightKeys(const FlightSet &fs, int i) {
   return (const int16_t *)(fs.data + FT_HEADER + (uint32_t)i * ftRecordBytes(fs.h) + 8);  // 記録の長さは偶数なので 2 バイト境界に載る
 }
 
-// fs があれば、架空の飛行機の代わりに本物の便を、1 日を dayMs で回して動かす (#t)。船とラベルは出さない
-// (便は数千あり、1 機ずつのスプライトはページに収まらないので、全機が同じ印を使う)
-void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32_t burstHz, const FlightSet *fs = nullptr, uint32_t dayMs = 0) {
+// fs があれば、架空の飛行機の代わりに本物の便を、1 日を dayMs で回して動かす (#t)。ss があれば本物の船も同じ時計で動かす。
+// ラベルは出さない (便は数千あり、1 機ずつのスプライトはページに収まらないので、飛行機は全機がブロック 0、船はブロック 1 の印を使う)
+void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32_t burstHz, const FlightSet *fs = nullptr, uint32_t dayMs = 0,
+                const FlightSet *ss = nullptr) {
   if (fs) labels = false;
-  const int PLANES = fs ? (int)fs->h.flights : planesPerBoard * NUM_BOARDS, SHIPS = fs ? 0 : 4 * NUM_BOARDS, N = PLANES + SHIPS;
+  const int PLANES = fs ? (int)fs->h.flights : planesPerBoard * NUM_BOARDS, SHIPS = fs ? (ss ? (int)ss->h.flights : 0) : 4 * NUM_BOARDS, N = PLANES + SHIPS;
   const char *tag = fs ? "cmd t" : "cmd G";
   GMover *m = (GMover *)(fs ? ps_calloc(N, sizeof(GMover)) : calloc(N, sizeof(GMover)));
   if (!m) { Serial.printf("%s: out of memory\n", tag); return; }
   randomSeed(esp_random());
   for (int k = 0; k < N && fs; k++) {
-    m[k].size = 7;
+    m[k].ship = k >= PLANES;
+    m[k].size = m[k].ship ? 5 : 7;
     m[k].hidden = true;
     for (int pg = 0; pg < 2; pg++) m[k].rb[pg] = -1;
   }
@@ -923,11 +926,13 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
     bteCopy(2, 0, 0, 1, 0, 0, 480, 480);
     regCacheClear();
     drawToPage(SHEET_PAGE);
-    for (int k = 0; k < (fs ? 1 : N); k++) {  // 本物の便は全機がブロック 0 の印を使う
+    for (int k = 0; k < (fs ? 2 : N); k++) {  // 本物は飛行機がブロック 0、船がブロック 1 の印を使う
       int bx = (k % BLOCKS_PER_ROW) * BLOCK_W, by = (k / BLOCKS_PER_ROW) * BLOCK_H;
       for (int q = 0; q < 4; q++) {
-        SpriteGeom g = spriteGeom(m[k], q);
-        streamPixels(bx + g.ox, by + g.oy, g.w, g.h, [&](int x, int y) { return spritePixel(m[k], q, g, x, y); });
+        const GMover &o = fs ? m[k ? PLANES : 0] : m[k];
+        if (fs && k && !SHIPS) break;
+        SpriteGeom g = spriteGeom(o, q);
+        streamPixels(bx + g.ox, by + g.oy, g.w, g.h, [&](int x, int y) { return spritePixel(o, q, g, x, y); });
         if (!labels) break;  // ラベルが無ければ向きは要らない
       }
     }
@@ -946,10 +951,13 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
     int back = 1 - front;
     RegBurst burst(burstHz);  // このコマはレジスタと BTE だけなので、SPI を握ったまま速く回す
     if (fs) {  // 本物の便: 今の時刻のキー位置で、前後のキーフレームの間を補う
-      float tk = ftKeyAt(millis() - t0, fs->h.keys, dayMs);
+      uint32_t now = millis() - t0;
+      float tk = ftKeyAt(now, fs->h.keys, dayMs), sk = ss ? ftKeyAt(now, ss->h.keys, dayMs) : 0;
       for (int i = 0; i < N; i++) {
         float lat = 0, lon = 0;
-        m[i].hidden = !ftPosition(flightKeys(*fs, i), fs->h.keys, tk, &lat, &lon);
+        bool ship = i >= PLANES;
+        const FlightSet &set = ship ? *ss : *fs;
+        m[i].hidden = !ftPosition(flightKeys(set, ship ? i - PLANES : i), set.h.keys, ship ? sk : tk, &lat, &lon);
         if (!m[i].hidden) qscFromLatLon(lat, lon, m[i].p);
       }
     }
@@ -1001,7 +1009,7 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
         GMover &o = m[i];
         if (o.nb != b) continue;
         SpriteGeom g = spriteGeom(o, o.q);
-        int blk = fs ? 0 : i, sx = (blk % BLOCKS_PER_ROW) * BLOCK_W + g.ox, sy = (blk / BLOCKS_PER_ROW) * BLOCK_H + g.oy;
+        int blk = fs ? (o.ship ? 1 : 0) : i, sx = (blk % BLOCKS_PER_ROW) * BLOCK_W + g.ox, sy = (blk / BLOCKS_PER_ROW) * BLOCK_H + g.oy;
         int dx = o.cx - o.size / 2 - g.mx, dy = o.cy - o.size / 2 - g.my;
         bteBlit(SHEET_PAGE, sx, sy, back, dx, dy, g.w, g.h, true);
         o.rx[back] = max(dx, 0);
@@ -1431,33 +1439,35 @@ void receiveSceneFace(int k, int f) {
   Serial.printf("\nw done %d %d in %lu ms\n", k, f, (unsigned long)(millis() - t0));
 }
 
-// ---- 本物の便 (#t、#J) ----
-static const char *FLIGHTS_PATH = "/flights/day.bin", *FLIGHTS_TMP = "/flights/day.tmp";
-
-// microSD の /flights/day.bin を PSRAM に読む (読めていれば読み直さない。#J のあとは読み直す)
-bool loadFlights(bool force) {
-  if (flightSet.data && !force) return true;
+// ---- 本物の便と船 (#t、#J) ----
+// microSD の tf.path を PSRAM に読む (読めていれば読み直さない。#J のあとは読み直す)。quiet なら、無いことを言わない
+bool loadTrack(TrackFile &tf, bool force, bool quiet = false) {
+  FlightSet &fs = tf.set;
+  if (fs.data && !force) return true;
   if (!mountCard(SD_HZ)) return false;
-  File fl = SD.open(FLIGHTS_PATH);
-  if (!fl) { Serial.printf("flights: %s missing (#J to fetch it)\n", FLIGHTS_PATH); return false; }
+  File fl = SD.open(tf.path);
+  if (!fl) {
+    if (!quiet) Serial.printf("%s: %s missing (#J to fetch it)\n", tf.name, tf.path);
+    return false;
+  }
   uint8_t h[FT_HEADER];
   FtHeader fh;
   if (fl.read(h, FT_HEADER) != FT_HEADER || !ftParseHeader(h, FT_HEADER, fl.size(), &fh)) {
-    Serial.printf("flights: %s is not a flight file of the right size\n", FLIGHTS_PATH);
+    Serial.printf("%s: %s is not a track file of the right size\n", tf.name, tf.path);
     fl.close();
     return false;
   }
-  free(flightSet.data);
-  flightSet.data = (uint8_t *)ps_malloc(fl.size());
-  if (!flightSet.data) { Serial.println("flights: no PSRAM"); fl.close(); return false; }
+  free(fs.data);
+  fs.data = (uint8_t *)ps_malloc(fl.size());
+  if (!fs.data) { Serial.printf("%s: no PSRAM\n", tf.name); fl.close(); return false; }
   uint32_t t0 = millis();
   fl.seek(0);
-  size_t got = fl.read(flightSet.data, fl.size());
+  size_t got = fl.read(fs.data, fl.size());
   bool ok = got == fl.size();
   fl.close();
-  if (!ok) { free(flightSet.data); flightSet.data = nullptr; Serial.println("flights: short read"); return false; }
-  flightSet.h = fh;
-  Serial.printf("flights: %lu flights, %u keys every %u min from %lu, %u bytes in %lu ms\n", (unsigned long)fh.flights, fh.keys, fh.stepMin,
+  if (!ok) { free(fs.data); fs.data = nullptr; Serial.printf("%s: short read\n", tf.name); return false; }
+  fs.h = fh;
+  Serial.printf("%s: %lu tracks, %u keys every %u min from %lu, %u bytes in %lu ms\n", tf.name, (unsigned long)fh.flights, fh.keys, fh.stepMin,
                 (unsigned long)fh.t0, (unsigned)got, (unsigned long)(millis() - t0));
   return true;
 }
@@ -1719,13 +1729,13 @@ void fetchSides() {
   curBoard = keep;
 }
 
-// #J: <WEB_BASE>/flights.bin を microSD の day.tmp に流し込み、形と長さが合ったら day.bin と入れ替えて読み直す。
-// 途中で切れても、前の day.bin は残る
-void fetchFlights() {
+// #J: <WEB_BASE>/<name>.bin を microSD の tmp に流し込み、形と長さが合ったら path と入れ替えて読み直す。
+// 途中で切れても、前のファイルは残る
+void fetchTrack(TrackFile &tf) {
   if (WiFi.status() != WL_CONNECTED) { Serial.println("cmd J: not on Wi-Fi (secrets.h, or no AP seen at boot)"); return; }
   if (!mountCard(SD_HZ)) return;
   char url[192];
-  snprintf(url, sizeof url, "%s/flights.bin?t=%lu", WEB_BASE, (unsigned long)millis());
+  snprintf(url, sizeof url, "%s/%s.bin?t=%lu", WEB_BASE, tf.name, (unsigned long)millis());
   uint32_t t0 = millis();
   WiFiClientSecure tls;
   tls.setInsecure();
@@ -1737,7 +1747,7 @@ void fetchFlights() {
   if (code != 200) { Serial.printf("cmd J: %s -> HTTP %d\n", url, code); http.end(); return; }
   int len = http.getSize();
   if (!SD.exists("/flights")) SD.mkdir("/flights");
-  File fl = SD.open(FLIGHTS_TMP, FILE_WRITE);
+  File fl = SD.open(tf.tmp, FILE_WRITE);
   if (!fl) { Serial.println("cmd J: cannot write the card"); http.end(); return; }
   static uint8_t buf[4096];
   uint8_t head[FT_HEADER];
@@ -1756,14 +1766,14 @@ void fetchFlights() {
   fl.close();
   FtHeader fh;
   if ((len > 0 && got != (uint32_t)len) || got < FT_HEADER || !ftParseHeader(head, FT_HEADER, got, &fh)) {
-    Serial.printf("cmd J: %s got %lu bytes (said %d), not a whole flight file; kept the old one\n", url, (unsigned long)got, len);
-    SD.remove(FLIGHTS_TMP);
+    Serial.printf("cmd J: %s got %lu bytes (said %d), not a whole track file; kept the old one\n", url, (unsigned long)got, len);
+    SD.remove(tf.tmp);
     return;
   }
-  SD.remove(FLIGHTS_PATH);
-  if (!SD.rename(FLIGHTS_TMP, FLIGHTS_PATH)) { Serial.println("cmd J: rename failed"); return; }
-  Serial.printf("cmd J: %lu bytes in %lu ms\n", (unsigned long)got, (unsigned long)(millis() - t0));
-  loadFlights(true);
+  SD.remove(tf.path);
+  if (!SD.rename(tf.tmp, tf.path)) { Serial.println("cmd J: rename failed"); return; }
+  Serial.printf("cmd J: %s %lu bytes in %lu ms\n", tf.name, (unsigned long)got, (unsigned long)(millis() - t0));
+  loadTrack(tf, true);
 }
 
 bool armed = false;
@@ -2032,13 +2042,17 @@ void loop() {
       demoDouble(sec > 0 ? sec : 30, labels, constrain(planes, 0, 200), vsync, constrain(mhz, 1, 10) * 1000000);  // 20MHz では状態の読みが化けた
       break;
     }
-    case 't': {  // #t<秒>[,<1 日を何秒で回すか、既定 120>] 本物の便 (microSD の /flights/day.bin) を、今の背景の上で動かす
+    case 't': {  // #t<秒>[,<1 日を何秒で回すか、既定 120>[,<船 0/1、既定 1>]] 本物の便 (/flights/day.bin) と船 (/flights/ships.bin、無ければ飛行機だけ) を、今の背景の上で動かす
       long sec = cmdIn.parseInt();
       long day = cmdIn.peek() == ',' ? (cmdIn.read(), cmdIn.parseInt()) : 120;
-      if (loadFlights(false)) demoDouble(sec > 0 ? sec : 120, false, 0, true, 10000000, &flightSet, constrain(day, 10, 86400) * 1000);
+      bool ships = cmdIn.peek() == ',' ? (cmdIn.read(), cmdIn.parseInt() != 0) : true;
+      if (loadTrack(flightFile, false)) {
+        const FlightSet *ss = ships && loadTrack(shipFile, false, true) ? &shipFile.set : nullptr;
+        demoDouble(sec > 0 ? sec : 120, false, 0, true, 10000000, &flightFile.set, constrain(day, 10, 86400) * 1000, ss);
+      }
       break;
     }
-    case 'J': fetchFlights(); break;  // #J Web の flights.bin で microSD の便を差し替える
+    case 'J': fetchTrack(flightFile); fetchTrack(shipFile); break;  // #J Web の flights.bin と ships.bin で microSD の便と船を差し替える
     case 'U': receiveFace(cmdIn.parseInt()); break;  // #U<面> 面の画像を受け取る
     case 'u': {  // 送られてきた面の画像を捨てて、焼き込みの地球に戻す
       for (int f = 0; f < NUM_FACES; f++) { free(faceOverride[f]); faceOverride[f] = nullptr; }
