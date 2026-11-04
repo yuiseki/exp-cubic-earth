@@ -30,6 +30,7 @@
 #include "idle_backlight.h"
 #include "backlight_cmd.h"
 #include "web_faces.h"
+#include "flight_track.h"
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <JPEGDEC.h>
@@ -868,18 +869,34 @@ template <typename F> void streamPixels(int x0, int y0, int w, int h, F px) {
   }
 }
 
-void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32_t burstHz) {
-  const int PLANES = planesPerBoard * NUM_BOARDS, SHIPS = 4 * NUM_BOARDS, N = PLANES + SHIPS;
-  GMover *m = (GMover *)calloc(N, sizeof(GMover));
-  if (!m) { Serial.println("cmd G: out of memory"); return; }
+// 本物の 1 日の便 (flight_track.h)。#t の初回か #J のあとに microSD から PSRAM へ読む
+static FlightSet flightSet = {{0, 0, 0, 0}, nullptr};
+
+static inline const int16_t *flightKeys(const FlightSet &fs, int i) {
+  return (const int16_t *)(fs.data + FT_HEADER + (uint32_t)i * ftRecordBytes(fs.h) + 8);  // 記録の長さは偶数なので 2 バイト境界に載る
+}
+
+// fs があれば、架空の飛行機の代わりに本物の便を、1 日を dayMs で回して動かす (#t)。船とラベルは出さない
+// (便は数千あり、1 機ずつのスプライトはページに収まらないので、全機が同じ印を使う)
+void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32_t burstHz, const FlightSet *fs = nullptr, uint32_t dayMs = 0) {
+  if (fs) labels = false;
+  const int PLANES = fs ? (int)fs->h.flights : planesPerBoard * NUM_BOARDS, SHIPS = fs ? 0 : 4 * NUM_BOARDS, N = PLANES + SHIPS;
+  const char *tag = fs ? "cmd t" : "cmd G";
+  GMover *m = (GMover *)(fs ? ps_calloc(N, sizeof(GMover)) : calloc(N, sizeof(GMover)));
+  if (!m) { Serial.printf("%s: out of memory\n", tag); return; }
   randomSeed(esp_random());
-  for (int k = 0; k < N; k++) {
+  for (int k = 0; k < N && fs; k++) {
+    m[k].size = 7;
+    m[k].hidden = true;
+    for (int pg = 0; pg < 2; pg++) m[k].rb[pg] = -1;
+  }
+  for (int k = 0; k < N && !fs; k++) {
     GMover &o = m[k];
     o.ship = k >= PLANES;
     o.size = o.ship ? 5 : 11;
     o.speed = o.ship ? 0.0005f : random(25, 60) / 10000.0f;
     if (!labels) o.label[0] = 0;
-    else if (o.ship) snprintf(o.label, sizeof(o.label), "MARU-%d", k - PLANES + 1);
+    else if (o.ship) snprintf(o.label, sizeof(o.label), "MARU-%u", (unsigned)(k - PLANES + 1) % 100u);
     else snprintf(o.label, sizeof(o.label), "%s%03d", (k % 2) ? "JL" : "NH", (int)random(100, 999));
     for (int t = 0; t < 500; t++) {
       randomPoint(o.p);
@@ -906,7 +923,7 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
     bteCopy(2, 0, 0, 1, 0, 0, 480, 480);
     regCacheClear();
     drawToPage(SHEET_PAGE);
-    for (int k = 0; k < N; k++) {
+    for (int k = 0; k < (fs ? 1 : N); k++) {  // 本物の便は全機がブロック 0 の印を使う
       int bx = (k % BLOCKS_PER_ROW) * BLOCK_W, by = (k / BLOCKS_PER_ROW) * BLOCK_H;
       for (int q = 0; q < 4; q++) {
         SpriteGeom g = spriteGeom(m[k], q);
@@ -918,7 +935,7 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
     drawToPage(0);
   }
   for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; writeRegC(0xD5, 0xF8); writeRegC(0xD6, 0x00); writeRegC(0xD7, 0xF8); }  // 透明色
-  Serial.printf("cmd G: setup %lu ms (%d movers)\n", (unsigned long)(millis() - s0), N);
+  Serial.printf("%s: setup %lu ms (%d movers)\n", tag, (unsigned long)(millis() - s0), N);
 
   int front = 0;
   uint32_t t0 = millis(), frames = 0, busy = 0, worst = 0, shown = 0, nearEdge = 0;
@@ -928,7 +945,15 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
     uint32_t f0 = micros();
     int back = 1 - front;
     RegBurst burst(burstHz);  // このコマはレジスタと BTE だけなので、SPI を握ったまま速く回す
-    for (int i = 0; i < N; i++) {  // 進める
+    if (fs) {  // 本物の便: 今の時刻のキー位置で、前後のキーフレームの間を補う
+      float tk = ftKeyAt(millis() - t0, fs->h.keys, dayMs);
+      for (int i = 0; i < N; i++) {
+        float lat = 0, lon = 0;
+        m[i].hidden = !ftPosition(flightKeys(*fs, i), fs->h.keys, tk, &lat, &lon);
+        if (!m[i].hidden) qscFromLatLon(lat, lon, m[i].p);
+      }
+    }
+    for (int i = 0; i < N && !fs; i++) {  // 進める
       GMover &o = m[i];
       float c = cosf(o.speed), s = sinf(o.speed), np[3], nd[3];
       for (int j = 0; j < 3; j++) { np[j] = o.p[j] * c + o.d[j] * s; nd[j] = o.d[j] * c - o.p[j] * s; }
@@ -948,7 +973,8 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
     }
     for (int i = 0; i < N; i++) {  // 描く基板と場所、ラベルの向きを先に決める
       GMover &o = m[i];
-      locate(o.p, o.size, &o.nb, &o.cx, &o.cy, &o.f, &o.fx, &o.fy);
+      if (o.hidden) o.nb = -1;
+      else locate(o.p, o.size, &o.nb, &o.cx, &o.cy, &o.f, &o.fx, &o.fy);
       o.q = (o.nb >= 0 && labels) ? southOnPanel(o.p, o.nb) : 0;
       o.eb = o.rb[back];
       o.ex = o.rx[back];
@@ -975,7 +1001,7 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
         GMover &o = m[i];
         if (o.nb != b) continue;
         SpriteGeom g = spriteGeom(o, o.q);
-        int sx = (i % BLOCKS_PER_ROW) * BLOCK_W + g.ox, sy = (i / BLOCKS_PER_ROW) * BLOCK_H + g.oy;
+        int blk = fs ? 0 : i, sx = (blk % BLOCKS_PER_ROW) * BLOCK_W + g.ox, sy = (blk / BLOCKS_PER_ROW) * BLOCK_H + g.oy;
         int dx = o.cx - o.size / 2 - g.mx, dy = o.cy - o.size / 2 - g.my;
         bteBlit(SHEET_PAGE, sx, sy, back, dx, dy, g.w, g.h, true);
         o.rx[back] = max(dx, 0);
@@ -1016,11 +1042,11 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
   regCacheClear();
   curBoard = keep;
   free(m);
-  Serial.printf("cmd G: verify %lu checks", (unsigned long)checks);
+  Serial.printf("%s: verify %lu checks", tag, (unsigned long)checks);
   for (int b = 0; b < NUM_BOARDS; b++) Serial.printf(", board %d %lu bad (first %lu ms)", b, (unsigned long)badRegs[b], (unsigned long)firstBad[b]);
   Serial.println();
-  Serial.printf("cmd G: drawn %lu times, %.1f%% within 8 px of the panel edge\n", (unsigned long)shown, 100.0 * nearEdge / (shown ? shown : 1));
-  Serial.printf("cmd G: %s, %d movers%s, %lu frames in %d s, work %.1f ms/frame (worst %.1f), %.0f fps if not held to 30\n", vsync ? "vsync" : "no vsync", N,
+  Serial.printf("%s: drawn %lu times, %.1f%% within 8 px of the panel edge\n", tag, (unsigned long)shown, 100.0 * nearEdge / (shown ? shown : 1));
+  Serial.printf("%s: %s, %d movers%s, %lu frames in %d s, work %.1f ms/frame (worst %.1f), %.0f fps if not held to 30\n", tag, vsync ? "vsync" : "no vsync", N,
                 labels ? " with labels" : "", (unsigned long)frames, seconds, busy / 1000.0 / frames, worst / 1000.0, frames * 1e6 / busy);
 }
 
@@ -1156,7 +1182,7 @@ void demoMovers(int seconds, bool labels, int planesPerBoard) {
     o.speed = (o.ship ? 0.0005f : random(25, 60) / 10000.0f);  // ラジアン/コマ (飛行機は 0.14〜0.34 度)
     o.board = -1;
     if (!labels) o.label[0] = 0;
-    else if (o.ship) snprintf(o.label, sizeof(o.label), "MARU-%d", k - PLANES + 1);
+    else if (o.ship) snprintf(o.label, sizeof(o.label), "MARU-%u", (unsigned)(k - PLANES + 1) % 100u);
     else snprintf(o.label, sizeof(o.label), "%s%03d", (k % 2) ? "JL" : "NH", (int)random(100, 999));
     for (int t = 0; t < 500; t++) {  // 映っている面の上 (船は海の上) から始める
       randomPoint(o.p);
@@ -1405,6 +1431,37 @@ void receiveSceneFace(int k, int f) {
   Serial.printf("\nw done %d %d in %lu ms\n", k, f, (unsigned long)(millis() - t0));
 }
 
+// ---- 本物の便 (#t、#J) ----
+static const char *FLIGHTS_PATH = "/flights/day.bin", *FLIGHTS_TMP = "/flights/day.tmp";
+
+// microSD の /flights/day.bin を PSRAM に読む (読めていれば読み直さない。#J のあとは読み直す)
+bool loadFlights(bool force) {
+  if (flightSet.data && !force) return true;
+  if (!mountCard(SD_HZ)) return false;
+  File fl = SD.open(FLIGHTS_PATH);
+  if (!fl) { Serial.printf("flights: %s missing (#J to fetch it)\n", FLIGHTS_PATH); return false; }
+  uint8_t h[FT_HEADER];
+  FtHeader fh;
+  if (fl.read(h, FT_HEADER) != FT_HEADER || !ftParseHeader(h, FT_HEADER, fl.size(), &fh)) {
+    Serial.printf("flights: %s is not a flight file of the right size\n", FLIGHTS_PATH);
+    fl.close();
+    return false;
+  }
+  free(flightSet.data);
+  flightSet.data = (uint8_t *)ps_malloc(fl.size());
+  if (!flightSet.data) { Serial.println("flights: no PSRAM"); fl.close(); return false; }
+  uint32_t t0 = millis();
+  fl.seek(0);
+  size_t got = fl.read(flightSet.data, fl.size());
+  bool ok = got == fl.size();
+  fl.close();
+  if (!ok) { free(flightSet.data); flightSet.data = nullptr; Serial.println("flights: short read"); return false; }
+  flightSet.h = fh;
+  Serial.printf("flights: %lu flights, %u keys every %u min from %lu, %u bytes in %lu ms\n", (unsigned long)fh.flights, fh.keys, fh.stepMin,
+                (unsigned long)fh.t0, (unsigned)got, (unsigned long)(millis() - t0));
+  return true;
+}
+
 // ---- 起動の流れ ----
 // 「流れ」= LT7680 のリセット → PLL/SDRAM → 表示オン → 塗り → パネルの SWRESET + 初期化列 ×2。
 // LCM_RESET は全基板で共有なので、リセットは 1 回で全基板に掛かる。その後は基板ごとに設定する
@@ -1481,7 +1538,7 @@ void setup() {
 #endif
                 (unsigned long)pixelHz, SPI_DRIVE);
   for (int b = 0; b < NUM_BOARDS; b++) Serial.printf("diag: board %d lt7680 %s, face %d, turn %d\n", b, ok[b] ? "OK" : "FAILED", faceOf[b], rotOf[b]);
-  Serial.printf("diag: boot %u-%u ms, STSR=0x%02X\n", t0, t1, readStatus());
+  Serial.printf("diag: boot %lu-%lu ms, STSR=0x%02X\n", (unsigned long)t0, (unsigned long)t1, readStatus());
 #else
   // 以前の起動 (LCD_CS が抜けていた頃の対症療法): 1.5 秒待ってから「流れ」を BOOT_FLOWS 回
   delay(1500);
@@ -1543,7 +1600,7 @@ bool joinWiFi() {
     uint32_t t0 = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - t0 < 8000) delay(100);
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.printf("wifi: %s, channel %d, %s\n", aps[order[i]].ssid, WiFi.channel(), WiFi.localIP().toString().c_str());
+      Serial.printf("wifi: %s, channel %d, %s\n", aps[order[i]].ssid, (int)WiFi.channel(), WiFi.localIP().toString().c_str());
       return true;
     }
     WiFi.disconnect();
@@ -1660,6 +1717,53 @@ void fetchSides() {
     fetchSide(url);
   }
   curBoard = keep;
+}
+
+// #J: <WEB_BASE>/flights.bin を microSD の day.tmp に流し込み、形と長さが合ったら day.bin と入れ替えて読み直す。
+// 途中で切れても、前の day.bin は残る
+void fetchFlights() {
+  if (WiFi.status() != WL_CONNECTED) { Serial.println("cmd J: not on Wi-Fi (secrets.h, or no AP seen at boot)"); return; }
+  if (!mountCard(SD_HZ)) return;
+  char url[192];
+  snprintf(url, sizeof url, "%s/flights.bin?t=%lu", WEB_BASE, (unsigned long)millis());
+  uint32_t t0 = millis();
+  WiFiClientSecure tls;
+  tls.setInsecure();
+  HTTPClient http;
+  WiFiClient plain;
+  bool https = strncmp(url, "https:", 6) == 0;
+  if (!(https ? http.begin(tls, url) : http.begin(plain, url))) { Serial.printf("cmd J: bad url %s\n", url); return; }
+  int code = http.GET();
+  if (code != 200) { Serial.printf("cmd J: %s -> HTTP %d\n", url, code); http.end(); return; }
+  int len = http.getSize();
+  if (!SD.exists("/flights")) SD.mkdir("/flights");
+  File fl = SD.open(FLIGHTS_TMP, FILE_WRITE);
+  if (!fl) { Serial.println("cmd J: cannot write the card"); http.end(); return; }
+  static uint8_t buf[4096];
+  uint8_t head[FT_HEADER];
+  uint32_t got = 0, last = millis();
+  NetworkClient *st = http.getStreamPtr();
+  while ((len < 0 || got < (uint32_t)len) && millis() - last < 20000 && (http.connected() || st->available())) {
+    int a = st->available();
+    if (a <= 0) { delay(2); continue; }
+    int n = st->readBytes(buf, min(a, (int)sizeof buf));
+    if (got < FT_HEADER) memcpy(head + got, buf, min(n, (int)(FT_HEADER - got)));
+    fl.write(buf, n);
+    got += n;
+    last = millis();
+  }
+  http.end();
+  fl.close();
+  FtHeader fh;
+  if ((len > 0 && got != (uint32_t)len) || got < FT_HEADER || !ftParseHeader(head, FT_HEADER, got, &fh)) {
+    Serial.printf("cmd J: %s got %lu bytes (said %d), not a whole flight file; kept the old one\n", url, (unsigned long)got, len);
+    SD.remove(FLIGHTS_TMP);
+    return;
+  }
+  SD.remove(FLIGHTS_PATH);
+  if (!SD.rename(FLIGHTS_TMP, FLIGHTS_PATH)) { Serial.println("cmd J: rename failed"); return; }
+  Serial.printf("cmd J: %lu bytes in %lu ms\n", (unsigned long)got, (unsigned long)(millis() - t0));
+  loadFlights(true);
 }
 
 bool armed = false;
@@ -1790,7 +1894,7 @@ void loop() {
     case 'a': {
         int n = WiFi.scanNetworks();
         Serial.printf("%s %d access points\n", "scan:", n);
-        for (int i = 0; i < n && i < 8; i++) Serial.printf("%s   ch %d rssi %d %s\n", "scan:", WiFi.channel(i), WiFi.RSSI(i), WiFi.SSID(i).c_str());
+        for (int i = 0; i < n && i < 8; i++) Serial.printf("%s   ch %d rssi %d %s\n", "scan:", (int)WiFi.channel(i), (int)WiFi.RSSI(i), WiFi.SSID(i).c_str());
         WiFi.scanDelete();
         if (WiFi.status() != WL_CONNECTED) esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
       } break;  // #a 周りの Wi-Fi を探して受信の強さを出す (無線とアンテナの確認)
@@ -1928,6 +2032,13 @@ void loop() {
       demoDouble(sec > 0 ? sec : 30, labels, constrain(planes, 0, 200), vsync, constrain(mhz, 1, 10) * 1000000);  // 20MHz では状態の読みが化けた
       break;
     }
+    case 't': {  // #t<秒>[,<1 日を何秒で回すか、既定 120>] 本物の便 (microSD の /flights/day.bin) を、今の背景の上で動かす
+      long sec = cmdIn.parseInt();
+      long day = cmdIn.peek() == ',' ? (cmdIn.read(), cmdIn.parseInt()) : 120;
+      if (loadFlights(false)) demoDouble(sec > 0 ? sec : 120, false, 0, true, 10000000, &flightSet, constrain(day, 10, 86400) * 1000);
+      break;
+    }
+    case 'J': fetchFlights(); break;  // #J Web の flights.bin で microSD の便を差し替える
     case 'U': receiveFace(cmdIn.parseInt()); break;  // #U<面> 面の画像を受け取る
     case 'u': {  // 送られてきた面の画像を捨てて、焼き込みの地球に戻す
       for (int f = 0; f < NUM_FACES; f++) { free(faceOverride[f]); faceOverride[f] = nullptr; }

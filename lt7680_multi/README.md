@@ -118,7 +118,31 @@ ISS の軌跡は描いた時刻のもので、動かない。ESP-NOW で `#s2` �
 
 3 枚の切り替えは約 2.7 秒 (1 枚ごとに microSD から面を読んで約 0.3 秒、描いて約 0.6 秒)。シーン 0 (地球) と 1 (2026-10-19 の雲) を、ESP-NOW で 3 回切り替えて 3 回とも 3 枚に描けた (2026-10-28)。
 
-## 地球の面
+## 本物の飛行機の 1 日 (`#t`、`#J`、`flights/`)
+
+`#G` と同じダブルバッファで、架空の飛行機の代わりに、ある 1 日の定期便を動かす。背景は今の面 (シーンを出していればシーンの画像)。
+
+```
+#t60        # microSD の /flights/day.bin を 60 秒、1 日を 120 秒で回して動かす (初回だけ PSRAM へ読む)
+#t300,600   # 300 秒、1 日を 600 秒で
+#J          # <WEB_BASE>/flights.bin を取って microSD の /flights/day.bin を差し替え、読み直す
+```
+
+ふだんは microSD から読み、`#J` を送ったときだけ Web から取って microSD を書き換える。Wi-Fi が無い会場でも、前に取った日が動く。`#J` は day.tmp に書いてから、形と長さ (`flight_track.h` の先頭と一致するか) を確かめて day.bin と入れ替えるので、途中で切れても前の日が残る。ESP-NOW で両モジュールに送れる。
+
+ファイルは全球の便を持ち、モジュールは自分の面に載る分だけ描く (どの面かは `#G` と同じ QSC の投影)。15 分ごとのキーフレームの間は、モジュールが緯度経度のまま直線で補う (`flight_track.h`、`test/test_flight_track.cpp`)。全機が同じ印 (黄色い十字、7 画素) を使い、ラベルは出さない (数千機ぶんのスプライトはページに収まらない)。
+
+作り方 (母艦):
+
+```sh
+# adsb.lol の globe_history (ODbL) の 1 日 (約 3.5GB) を展開して
+python -I flights/globe_snapshots.py DIR 2026-11-03 snaps.json --every 15 --fill   # 定期便の 15 分ごとの位置、洋上は大円で補う
+python -I flights/pack_flights.py snaps.json flights.bin --cap 60                  # どの時点でも 1 面 60 機まで
+cp flights.bin /sata_hdd_24tb/www/html/static/tmp/cubic-earth/                     # そのあと ESP-NOW で #J
+```
+
+`--cap` は 1 面の機数の上限。1 機が 1 コマに BTE 2 回 (消すと描く) で、`#G` の測り (162 個で 1 コマ 29.2ms) から、3 面 x 60 機で 30 コマ/秒に収まる見込み。2026-11-03 の分は 65,206 便から 4,890 便、1.9MB。
+
 
 `earth_qsc480x6.h` は立方体の 6 面 (QSC 投影、480x480、RGB565)。
 
