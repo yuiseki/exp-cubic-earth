@@ -2,7 +2,7 @@
 
 The 24 windows become one snapshot file with a key every hour (an hour with no window stays
 empty, so the keys stay evenly spaced as flight_track.h expects), then pack_flights.py picks
-at most CAP ships per face and writes the same CEF1 file the planes use.
+at most CAP ships per face (of those seen in two consecutive hours) and writes the same CEF1 file the planes use.
 
 Usage: python -I daily_ships.py [--day 2026-11-04] [--cap 30]
 """
@@ -40,6 +40,17 @@ def day_snapshots(root, day):
     return snaps, seen
 
 
+def drawable(snaps):
+    """Only ships seen in two consecutive hours: the cube draws a ship between two keyframes, so one seen
+    once (or with gaps) never shows, yet would take one of the face's CAP places in pack_flights.select."""
+    keys = sorted(snaps, key=int)
+    seen = [{r[3] for r in snaps[k]} for k in keys]
+    keep = set()
+    for a, b in zip(seen, seen[1:]):
+        keep |= a & b
+    return {k: [r for r in snaps[k] if r[3] in keep] for k in keys}
+
+
 def log(msg):
     line = f"{dt.datetime.now().isoformat(timespec='seconds')} {msg}"
     print(line, flush=True)
@@ -64,7 +75,7 @@ def main():
         return 1
     snap = SNAPS / f"{day}.json"
     snap.parent.mkdir(parents=True, exist_ok=True)
-    snap.write_text(json.dumps(snaps, separators=(",", ":")))
+    snap.write_text(json.dumps(drawable(snaps), separators=(",", ":")))
     p = subprocess.run([sys.executable, "-I", str(HERE / "pack_flights.py"), str(snap), str(dated), "--cap", str(a.cap)],
                        capture_output=True, text=True)
     if p.returncode:

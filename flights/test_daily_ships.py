@@ -22,3 +22,10 @@ def test_day_snapshots_keep_every_hour_even_when_missing(tmp_path):
 def test_day_before_is_utc():
     now = dt.datetime(2026, 11, 5, 8, 0, tzinfo=dt.timezone(dt.timedelta(hours=9)))  # 23:00 UTC on the 4th
     assert ds.day_before(now) == "2026-11-03"
+
+
+def test_keep_only_ships_seen_in_two_consecutive_hours():
+    a, b, c = [1, 2, 3, "A", 70, 0], [1, 2, 3, "B", 70, 0], [1, 2, 3, "C", 70, 0]
+    snaps = {"0": [a, b], "3600": [a], "7200": [b, c], "10800": [c]}
+    # A: hours 0 and 1, C: hours 2 and 3 -> drawn; B: hours 0 and 2 only -> the cube never shows it
+    assert ds.drawable(snaps) == {"0": [a], "3600": [a], "7200": [c], "10800": [c]}
