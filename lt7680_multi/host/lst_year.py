@@ -20,6 +20,7 @@ import argparse
 import os
 import sys
 import urllib.request
+from typing import Callable, NamedTuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -55,6 +56,59 @@ def tif_urls(mmdd):
 def celsius(dn):
     c = dn.astype(np.float32) * np.float32(0.02) - np.float32(273.15)
     return np.where(dn == 0, np.float32(np.nan), c)
+
+
+SGLI = ("https://s3.ap-northeast-1.wasabisys.com/je-pds/cog/v1/"
+        "JAXA.G-Portal_GCOM-C.SGLI_standard.L3-LST.daytime.v3_global_half-monthly")
+
+
+def dated_half_months(first, last):
+    """YYYY-MM-01 and YYYY-MM-16 from first to last, both included."""
+    out, y, m = [], int(first[:4]), int(first[5:7])
+    while True:
+        for d in (1, 16):
+            f = f"{y:04d}-{m:02d}-{d:02d}"
+            if first <= f <= last:
+                out.append(f)
+        if f >= last:
+            return out
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+
+
+def dated_label(date):
+    y, m, d = (int(v) for v in date.split("-"))
+    return f"{y}年{m}月{'前半' if d == 1 else '後半'}"
+
+
+def sgli_urls(date):
+    ym, dd = date[:7], date[8:]
+    return (f"{SGLI}/{ym}/{dd}/0/W180.00-E000.00/W180.00-S90.00-E000.00-N90.00-LST.tiff",
+            f"{SGLI}/{ym}/{dd}/0/E000.00-E180.00/E000.00-S90.00-E180.00-N90.00-LST.tiff")
+
+
+def sgli_celsius(dn):
+    c = dn.astype(np.float32) * np.float32(0.02) - np.float32(273.15)
+    return np.where(dn == 65535, np.float32(np.nan), c)
+
+
+class LstSet(NamedTuple):
+    label: Callable[[str], str]
+    urls: Callable[[str], tuple]
+    celsius: Callable[[np.ndarray], np.ndarray]
+    credit: str
+    numbered: bool  # frames in <OUT>/1..24 (scenes 101..124) rather than <OUT>/<date>
+
+
+SETS = {
+    # the 2012-2021 mean of Aqua MODIS, 24 half-months of no year
+    "modis-normal": LstSet(label, tif_urls, celsius, "MODIS LST (NASA), JAXA Earth", True),
+    # JAXA's GCOM-C "Shikisai" SGLI, real half-months from 2018-01 on (nodata 65535; 0.2 degrees at cog level 0)
+    "shikisai-lst": LstSet(dated_label, sgli_urls, sgli_celsius, "GCOM-C/SGLI (JAXA)", False),
+}
+
+
+def frame_dir(s, frame, k):
+    return str(k) if s.numbered else frame
 
 
 def join(west, east):
@@ -107,7 +161,7 @@ def spot(land, w, h, margin=8, step=4, toward=None):
     return best_of([(x, y) for y in ys if abs(y - by) < step for x in xs if abs(x - bx) < step])
 
 
-def window(face_img, text, x, y, n):
+def window(face_img, text, x, y, n, credit="MODIS LST (NASA), JAXA Earth"):
     """A small box at (x, y) (WIN_W x WIN_H at 480 px): the half-month, the colour scale, the credit."""
     im = Image.fromarray(np.clip(face_img, 0, 255).astype(np.uint8))
     d = ImageDraw.Draw(im)
@@ -115,7 +169,10 @@ def window(face_img, text, x, y, n):
     f = lambda px: ImageFont.truetype(FONT, max(8, int(px * s)))
     w, h = int(200 * s), int(112 * s)
     d.rectangle([x, y, x + w - 1, y + h - 1], fill=(0, 0, 0), outline=(110, 110, 110))
-    d.text((x + w // 2, y + int(4 * s)), text, font=f(24), fill=(255, 255, 255), anchor="ma")
+    size = 24
+    while size > 12 and d.textlength(text, font=f(size)) > w - 12 * s:  # "2025年10月後半" is longer than "7月前半"
+        size -= 1
+    d.text((x + w // 2, y + int(4 * s) + int((24 - size) * s / 2)), text, font=f(size), fill=(255, 255, 255), anchor="ma")
     d.text((x + w // 2, y + int(36 * s)), "昼の地表の温度 (℃)", font=f(19), fill=(255, 255, 255), anchor="ma")
     x0, x1, by = x + int(20 * s), x + w - int(20 * s), y + int(63 * s)
     bar = colours(np.linspace(T_MIN, T_MAX, x1 - x0)).astype(np.uint8)
@@ -124,25 +181,31 @@ def window(face_img, text, x, y, n):
     for t in (-40, -20, 0, 20, 40, 60):
         tx = x0 + (t - T_MIN) / (T_MAX - T_MIN) * (x1 - x0 - 1)
         d.text((tx, by + int(12 * s)), f"{t}", font=f(12), fill=(255, 255, 255), anchor="ma")
-    d.text((x + w // 2, y + h - int(15 * s)), "MODIS LST (NASA), JAXA Earth", font=f(10), fill=(170, 170, 170), anchor="ma")
+    d.text((x + w // 2, y + h - int(15 * s)), credit, font=f(10), fill=(170, 170, 170), anchor="ma")
     return np.asarray(im, dtype=np.float32)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=os.path.expanduser("~/Workspaces/tmp/cubic-lst-year"))
+    ap.add_argument("--set", choices=sorted(SETS), default="modis-normal")
+    ap.add_argument("--from", dest="first", default="2025-01-01", help="dated sets: the first half-month (YYYY-MM-01 or -16)")
+    ap.add_argument("--to", dest="last", default="2026-10-01", help="dated sets: the last half-month")
+    ap.add_argument("--out", help="default ~/Workspaces/tmp/cubic-lst-year (modis-normal) or ~/Workspaces/tmp/cubic-<set>")
     ap.add_argument("--lon0", type=float, default=139.767)
     ap.add_argument("--size", type=int, default=480)
     args = ap.parse_args()
+    ds = SETS[args.set]
+    if not args.out:
+        args.out = os.path.expanduser("~/Workspaces/tmp/" + ("cubic-lst-year" if args.set == "modis-normal" else f"cubic-{args.set}"))
     src = os.path.join(args.out, "src")
     os.makedirs(src, exist_ok=True)
     n = args.size
     centres = [(args.lon0 + 90 * i, 0) for i in range(4)] + [(args.lon0, 90), (args.lon0, -90)]
-    hms = half_months()
+    hms = half_months() if ds.numbered else dated_half_months(args.first, args.last)
     lsts = []
     for mmdd in hms:
-        w, e = (fetch(u, os.path.join(src, f"{mmdd}-{u.rsplit('/', 1)[1]}")) for u in tif_urls(mmdd))
-        lsts.append(celsius(join(w, e)))
+        w, e = (fetch(u, os.path.join(src, f"{mmdd}-{u.rsplit('/', 1)[1]}")) for u in ds.urls(mmdd))
+        lsts.append(ds.celsius(join(w, e)))
     # land anywhere in the year, on each side face: the windows sit where none of the 24 has land
     ever = np.zeros(lsts[0].shape, dtype=np.float32)
     for lst in lsts:
@@ -153,13 +216,13 @@ def main():
     h, wd = lsts[0].shape
     bm = Image.open(clouds.BLUE_MARBLE).convert("RGB").resize((wd, h), Image.BILINEAR)
     base = np.asarray(bm, dtype=np.float32) * SEA_DIM
-    sheet = Image.new("RGB", (6 * n // 2, 4 * n // 2))
+    sheet = Image.new("RGB", (6 * n // 2, -(-len(hms) // 6) * n // 2))
     for k, (mmdd, lst) in enumerate(zip(hms, lsts), start=1):
         img = picture(lst, base)
         faces = [clouds.face(img, lo, la, n) for lo, la in centres]
         for i, (x, y) in enumerate(spots):
-            faces[i] = window(faces[i], label(mmdd), x, y, n)
-        out = os.path.join(args.out, str(k))
+            faces[i] = window(faces[i], ds.label(mmdd), x, y, n, ds.credit)
+        out = os.path.join(args.out, frame_dir(ds, mmdd, k))
         os.makedirs(out, exist_ok=True)
         for i, f in enumerate(faces):
             clouds.rgb565(f).astype("<u2").tofile(os.path.join(out, f"face{i}.bin"))
@@ -169,7 +232,7 @@ def main():
         cross.save(os.path.join(out, "faces.png"))
         tile = Image.fromarray(np.clip(faces[1], 0, 255).astype(np.uint8)).resize((n // 2, n // 2))
         sheet.paste(tile, ((k - 1) % 6 * n // 2, (k - 1) // 6 * n // 2))
-        print(f"{k:2d} {mmdd} {label(mmdd)}: land {np.nanmin(lst):.0f} to {np.nanmax(lst):.0f} C", flush=True)
+        print(f"{k:2d} {mmdd} {ds.label(mmdd)}: land {np.nanmin(lst):.0f} to {np.nanmax(lst):.0f} C", flush=True)
     print("windows (x, y) on faces 0-3:", spots)
     sheet.save(os.path.join(args.out, "sheet.png"))
 

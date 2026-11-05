@@ -1,13 +1,16 @@
 """Write face<k>.bin files (from clouds.py) to lt7680_multi's microSD as one scene (#w).
 
     python send_scene.py PORT DIR SCENE [FACE ...]     (default faces: 0 1 2 3 4 5)
+    python send_scene.py PORT ROOT SET [FACE ...] --tree   (ROOT/<YYYY-MM-DD>/ as SET/<YYYY-MM-DD>, for #v)
 
 The XIAO stores them as /scenes/<SCENE>/face<f>.bin; #s<SCENE> (over USB or
 ESP-NOW) then draws the scene. Needs pyserial (pi5-deck:
 ~/.venv-esptool/bin/python). Waits for the firmware's "k" after every 4096
 bytes, as send_faces.py does.
 """
+import argparse
 import os
+import re
 import sys
 import termios
 import time
@@ -65,12 +68,26 @@ def send(port, scene, face, path):
     print(f"scene {scene} face {face}: {SIZE} bytes in {time.time() - t0:.1f} s")
 
 
+def jobs(root, scene, faces, tree):
+    """(scene name, face, file) to send. With tree, root holds one directory per dated frame
+    (YYYY-MM-DD, as lst_year.py writes them) and each goes to <scene>/<date>."""
+    if not tree:
+        return [(scene, f, os.path.join(root, f"face{f}.bin")) for f in faces]
+    dates = sorted(d for d in os.listdir(root) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", d) and os.path.isdir(os.path.join(root, d)))
+    return [(f"{scene}/{d}", f, os.path.join(root, d, f"face{f}.bin")) for d in dates for f in faces]
+
+
 def main():
-    port = open_port(sys.argv[1])
-    scene = int(sys.argv[3])
-    faces = [int(f) for f in sys.argv[4:]] or list(range(6))
-    for f in faces:
-        send(port, scene, f, os.path.join(sys.argv[2], f"face{f}.bin"))
+    ap = argparse.ArgumentParser()
+    ap.add_argument("port")
+    ap.add_argument("dir")
+    ap.add_argument("scene", help="a number (#s<k>) or a name (#v, e.g. shikisai-lst/2025-07-01)")
+    ap.add_argument("faces", nargs="*", type=int, default=list(range(6)))
+    ap.add_argument("--tree", action="store_true", help="dir holds dated frames; send each as <scene>/<date>")
+    a = ap.parse_args()
+    port = open_port(a.port)
+    for scene, f, path in jobs(a.dir, a.scene, a.faces, a.tree):
+        send(port, scene, f, path)
 
 
 if __name__ == "__main__":

@@ -79,3 +79,33 @@ def test_spot_goes_to_the_preferred_corner_among_clear_places():
 
 def test_every_side_face_has_a_corner():
     assert len(ly.CORNERS) == 4 and ly.CORNERS[0] == (1, 0) and ly.CORNERS[1:] == [(1, 1)] * 3
+
+
+def test_dated_half_months_run_from_the_first_to_the_last_inclusive():
+    d = ly.dated_half_months("2025-01-01", "2026-10-01")
+    assert d[:3] == ["2025-01-01", "2025-01-16", "2025-02-01"]
+    assert d[-2:] == ["2026-09-16", "2026-10-01"]
+    assert len(d) == 43
+
+
+def test_dated_label_and_urls_for_shikisai():
+    s = ly.SETS["shikisai-lst"]
+    assert s.label("2025-10-16") == "2025年10月後半"
+    w, e = s.urls("2025-07-01")
+    assert w.endswith("L3-LST.daytime.v3_global_half-monthly/2025-07/01/0/W180.00-E000.00/W180.00-S90.00-E000.00-N90.00-LST.tiff")
+    assert e.endswith("/2025-07/01/0/E000.00-E180.00/E000.00-S90.00-E180.00-N90.00-LST.tiff")
+    assert "JAXA" in s.credit
+
+
+def test_shikisai_nodata_is_65535_and_the_normal_s_is_0():
+    dn = np.array([0, 65535, 15000], dtype=np.uint16)
+    c = ly.SETS["shikisai-lst"].celsius(dn)
+    assert np.isnan(c[1]) and not np.isnan(c[0]) and not np.isnan(c[2])
+    c = ly.SETS["modis-normal"].celsius(dn)
+    assert np.isnan(c[0]) and not np.isnan(c[1])
+
+
+def test_the_normal_keeps_its_numbered_frames_and_labels():
+    s = ly.SETS["modis-normal"]
+    assert s.label("07-01") == "7月前半"
+    assert ly.frame_dir(s, "07-01", 13) == "13" and ly.frame_dir(ly.SETS["shikisai-lst"], "2025-07-01", 13) == "2025-07-01"
