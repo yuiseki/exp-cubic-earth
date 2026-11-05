@@ -29,6 +29,7 @@
 #include "reg_verify.h"
 #include "idle_backlight.h"
 #include "backlight_cmd.h"
+#include "power_cmd.h"
 #include "web_faces.h"
 #include "flight_track.h"
 #include "icons.h"
@@ -1954,6 +1955,65 @@ bool assignFace(int x) {
   return true;
 }
 
+// ---- #z 消灯中の消費を 1 つずつ止めて測る (power_cmd.h) ----
+bool pwrW = false, pwrL = false, pwrP = false, pwrC = false;
+
+void powerStatus() {
+  Serial.printf("cmd z: wifi sleep %d, lt7680 sleep %d, panel sleep %d, cpu %lu MHz, backlight %s\n", pwrW, pwrL, pwrP,
+                (unsigned long)getCpuFrequencyMhz(), bl ? "on" : "off");
+}
+
+// LT7680 の PMU (0xDF): ビット 7 で省電力に入り、ビット 1:0 が種類 (3 = sleep、いちばん深い)。
+// 出るときはビット 7 を 0 にして、STSR のビット 1 (省電力中) が落ちるのを待つ
+void ltPower(bool save) {
+  int keep = curBoard;
+  for (int b = 0; b < NUM_BOARDS; b++) {
+    curBoard = b;
+    if (save) {
+      writeReg(0xDF, 0x83);
+      delay(5);
+    } else {
+      writeReg(0xDF, 0x03);
+      waitFor("leaving power saving", 1000, [] { return (readStatus() & 0x02) == 0; });
+    }
+    Serial.printf("cmd z: board %d lt7680 %s, STSR=0x%02X\n", b, save ? "sleep" : "awake", readStatus());
+  }
+  curBoard = keep;
+}
+
+// ST7701S: SLPIN (0x10) で眠らせ、SLPOUT (0x11) と 120ms 待ち、DISPON (0x29) で起こす
+void panelPower(bool save) {
+  int keep = curBoard;
+  const uint8_t page0[] = {0x77, 0x01, 0x00, 0x00, 0x00};
+  for (int b = 0; b < NUM_BOARDS; b++) {
+    curBoard = b;
+    panelCmd(0xFF, page0, sizeof(page0));
+    if (save) {
+      panelCmd(0x28);  // DISPOFF
+      panelCmd(0x10);
+    } else {
+      panelCmd(0x11);
+      delay(120);
+      panelCmd(0x29);
+    }
+  }
+  delay(120);  // SLPIN のあとも 120ms は次の SLPOUT を受けない
+  curBoard = keep;
+}
+
+void powerCmd(const PowerArg &a) {
+  if (!a.ok) { Serial.println("cmd z: use #z, #zw<0|1>, #zl<0|1>, #zp<0|1>, #zc<0|1>"); return; }
+  bool on = a.on == 1;
+  switch (a.what) {
+    case 'w': WiFi.setSleep(on); pwrW = on; break;
+    case 'l': if (on != pwrL) ltPower(on); pwrL = on; break;
+    case 'p': if (on != pwrP) panelPower(on); pwrP = on; break;
+    case 'c': setCpuFrequencyMhz(on ? 80 : 240); pwrC = on; break;
+    default: break;
+  }
+  powerStatus();
+}
+
 void loop() {
   idleTick();
   if (!cmdIn.available()) { delay(5); return; }
@@ -2082,6 +2142,11 @@ void loop() {
       bl = backlightAfter(bl, next);
       applyBacklight();
       Serial.printf("cmd b: backlight %s\n", bl ? "on" : "off");
+      break;
+    }
+    case 'z': {  // #z<対象><0|1> 消灯中に何が電気を使っているかを測る (power_cmd.h)。#z だけなら今の状態
+      String arg = cmdIn.readStringUntil('\n');
+      powerCmd(parsePowerArg(arg.c_str()));
       break;
     }
     case 'i': {  // #i<分> 何もしないときにバックライトを消すまで (USB ホストがいるときだけ、0 で消さない)。#i だけなら今の値
