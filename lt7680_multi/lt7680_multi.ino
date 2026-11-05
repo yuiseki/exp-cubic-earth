@@ -32,6 +32,7 @@
 #include "web_faces.h"
 #include "flight_track.h"
 #include "icons.h"
+#include "scene_names.h"
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <JPEGDEC.h>
@@ -1382,12 +1383,11 @@ void cardTest(long mhz) {
 #define FACE_BYTES (480u * 480u * 2u)
 // 読んだ面は #U と同じ faceOverride (PSRAM) に置くので、そのあとの #E、#G (飛行機と船) もシーンの画像を背景に使う。#u で焼き込みに戻る
 
-void scenePath(char *out, size_t n, int k, int f) { snprintf(out, n, "/scenes/%d/face%d.bin", k, f); }
-
-bool loadSceneFace(int k, int f) {
+// 名前つきのシーン (#v、#w<名前>,<面>) は /scenes/<名前>/ (scene_names.h)。数字のシーン k は名前 "k"
+bool loadSceneFace(const char *name, int f) {
   if (!mountCard(SD_HZ)) return false;
-  char path[40];
-  scenePath(path, sizeof path, k, f);
+  char path[96];
+  if (!sceneFacePath(path, sizeof path, name, f)) { Serial.printf("scene: bad name %s\n", name); return false; }
   File fl = SD.open(path);
   if (!fl || fl.size() != FACE_BYTES) { Serial.printf("scene: %s missing\n", path); if (fl) fl.close(); return false; }
   if (!faceOverride[f]) faceOverride[f] = (uint16_t *)ps_malloc(FACE_BYTES);
@@ -1397,35 +1397,107 @@ bool loadSceneFace(int k, int f) {
   return got == FACE_BYTES;
 }
 
-void showScene(int k) {
+int showSceneNamed(const char *name) {
   uint32_t t0 = millis();
   int keep = curBoard, shown = 0;
   for (int b = 0; b < NUM_BOARDS; b++) {
-    if (!loadSceneFace(k, faceOf[b])) continue;
+    if (!loadSceneFace(name, faceOf[b])) continue;
     curBoard = b;
     drawToPage(0);
     showPage(0);
     if (drawRegion(boardFace(b), 0, 0, 480, 480)) shown++;
   }
   curBoard = keep;
-  Serial.printf("scene %d: %d of %d boards in %lu ms\n", k, shown, NUM_BOARDS, (unsigned long)(millis() - t0));
+  Serial.printf("scene %s: %d of %d boards in %lu ms\n", name, shown, NUM_BOARDS, (unsigned long)(millis() - t0));
+  return shown;
 }
 
-File openSceneForWrite(int k, int f) {
-  char path[40];
-  snprintf(path, sizeof path, "/scenes/%d", k);
+void showScene(int k) {
+  char name[12];
+  snprintf(name, sizeof name, "%d", k);
+  showSceneNamed(name);
+}
+
+// /scenes/<名前> を、途中の階層も含めて作ってから面のファイルを開く
+File openSceneForWrite(const char *name, int f) {
+  char path[96];
+  if (!sceneDirPath(path, sizeof path, name)) return File();
   if (!SD.exists("/scenes")) SD.mkdir("/scenes");
-  if (!SD.exists(path)) SD.mkdir(path);
-  scenePath(path, sizeof path, k, f);
+  for (char *q = path + strlen("/scenes/"); ; q++) {
+    if (*q == '/' || *q == 0) {
+      char c = *q;
+      *q = 0;
+      if (!SD.exists(path)) SD.mkdir(path);
+      *q = c;
+      if (c == 0) break;
+    }
+  }
+  if (!sceneFacePath(path, sizeof path, name, f)) return File();
   return SD.open(path, FILE_WRITE);
+}
+
+// #v<組>,<から>[,<まで>[,<秒>]]: 組の日付のコマを範囲で描く。<まで> があれば止めるまで繰り返す。
+// 次の命令 (シリアルか ESP-NOW) が来たら、その場で止めて、その命令に譲る (scene_names.h)
+static const int VIEW_MAX_FRAMES = 512;
+static char viewFrames[VIEW_MAX_FRAMES][11];
+
+bool cmdPending();  // 命令が届いているか (CmdIn の下で定義)
+
+static int cmpFrame(const void *a, const void *b) { return strcmp((const char *)a, (const char *)b); }
+
+// 待つあいだに命令が来たら true
+bool viewWait(uint32_t ms) {
+  uint32_t t0 = millis();
+  while (millis() - t0 < ms) {
+    if (cmdPending()) return true;
+    delay(10);
+  }
+  return false;
+}
+
+void viewScenes(const char *args) {
+  ViewArgs v;
+  if (!parseViewArgs(args, v)) { Serial.println("v error: #v<set>,<from>[,<to>[,<sec>]] (dates as YYYY, YYYY-MM or YYYY-MM-DD)"); return; }
+  if (!mountCard(SD_HZ)) return;
+  char path[96];
+  sceneDirPath(path, sizeof path, v.set);
+  File dir = SD.open(path);
+  if (!dir || !dir.isDirectory()) { Serial.printf("v error: %s missing\n", path); return; }
+  int n = 0;
+  for (File e = dir.openNextFile(); e && n < VIEW_MAX_FRAMES; e = dir.openNextFile()) {
+    const char *nm = e.name();
+    const char *slash = strrchr(nm, '/');
+    if (slash) nm = slash + 1;
+    if (e.isDirectory() && strlen(nm) == 10 && dateLike(nm) && frameInRange(nm, v.from, v.to)) strcpy(viewFrames[n++], nm);
+    e.close();
+  }
+  dir.close();
+  if (n == 0) { Serial.printf("v error: no frames of %s from %s to %s\n", v.set, v.from, v.to); return; }
+  qsort(viewFrames, n, sizeof viewFrames[0], cmpFrame);
+  Serial.printf("v: %s, %d frames %s .. %s, %s every %d s\n", v.set, n, viewFrames[0], viewFrames[n - 1], v.loop ? "looping" : "once", v.sec);
+  for (uint32_t round = 0; ; round++) {
+    for (int i = 0; i < n; i++) {
+      char name[96];
+      snprintf(name, sizeof name, "%.63s/%.10s", v.set, viewFrames[i]);
+      uint32_t t0 = millis();
+      showSceneNamed(name);
+      bool last = !v.loop && i == n - 1;
+      uint32_t spent = millis() - t0, want = (uint32_t)v.sec * 1000;
+      if (!last && viewWait(want > spent ? want - spent : 0)) { Serial.printf("v: stopped at %s for the next command\n", viewFrames[i]); return; }
+      if (cmdPending()) { Serial.printf("v: stopped at %s for the next command\n", viewFrames[i]); return; }
+    }
+    if (!v.loop) return;
+  }
 }
 
 // #e<k>: 焼き込みの地球の 6 面を、シーン k として書き出す
 void exportEarth(int k) {
   if (!mountCard(SD_HZ)) return;
   uint32_t t0 = millis();
+  char name[12];
+  snprintf(name, sizeof name, "%d", k);
   for (int f = 0; f < NUM_FACES; f++) {
-    File fl = openSceneForWrite(k, f);
+    File fl = openSceneForWrite(name, f);
     if (!fl) { Serial.printf("e error: cannot write scene %d face %d\n", k, f); return; }
     fl.write((const uint8_t *)EARTH_QSC480X6[f], FACE_BYTES);
     fl.close();
@@ -1435,12 +1507,12 @@ void exportEarth(int k) {
 
 // #w<k>,<f>: 面の画像を #U と同じやり方 (4096 バイトずつ、受けるたびに "k") でシリアルから受け、シーン k の面 f として書く。
 // 送り手は host/send_scene.py。本体のバイト列はシリアルからだけ受ける
-void receiveSceneFace(int k, int f) {
+void receiveSceneFace(const char *name, int f) {
   const uint32_t chunk = 4096;
   static uint8_t buf[4096];
-  if (k < 0 || f < 0 || f >= NUM_FACES) { Serial.println("w error: scene >= 0, face 0-5"); return; }
+  if (!sceneNameOk(name) || f < 0 || f >= NUM_FACES) { Serial.println("w error: #w<scene number or name>,<face 0-5>"); return; }
   if (!mountCard(SD_HZ)) return;
-  File fl = openSceneForWrite(k, f);
+  File fl = openSceneForWrite(name, f);
   if (!fl) { Serial.println("w error: cannot open"); return; }
   while (Serial.available()) Serial.read();
   Serial.println("w ready");
@@ -1457,7 +1529,7 @@ void receiveSceneFace(int k, int f) {
     Serial.print("k");
   }
   fl.close();
-  Serial.printf("\nw done %d %d in %lu ms\n", k, f, (unsigned long)(millis() - t0));
+  Serial.printf("\nw done %s %d in %lu ms\n", name, f, (unsigned long)(millis() - t0));
 }
 
 // ---- 本物の便と船 (#t、#J) ----
@@ -1608,6 +1680,8 @@ class CmdIn : public Stream {
   int peek() override { return espnowIn.size() ? espnowIn.peek() : Serial.peek(); }
   size_t write(uint8_t b) override { return Serial.write(b); }
 } cmdIn;
+
+bool cmdPending() { return cmdIn.available() > 0; }
 
 // 起動時に secrets.h の AP につなぐ (web_faces.h の apOrder)。中継 (espnow_bridge) も同じ並びで同じ AP につなぐので、
 // ESP-NOW はその AP のチャンネルにそろう。つながっていれば #j で Web の画像を取れる。expt-the-map-runs と同じ形
@@ -1931,10 +2005,16 @@ void loop() {
       } break;  // #a 周りの Wi-Fi を探して受信の強さを出す (無線とアンテナの確認)
     case 's': showScene(cmdIn.parseInt()); break;  // #s<k> シーン k (microSD) を全基板に描く
     case 'e': exportEarth(cmdIn.parseInt()); break;  // #e<k> 焼き込みの地球をシーン k として microSD に書く
-    case 'w': {  // #w<k>,<f> シーン k の面 f を受けて microSD に書く (host/send_scene.py)
-      long k = cmdIn.parseInt();
-      long f = cmdIn.read() == ',' ? cmdIn.parseInt() : -1;
-      receiveSceneFace(k, f);
+    case 'w': {  // #w<k または名前>,<f> シーン k (名前つきなら /scenes/<名前>) の面 f を受けて microSD に書く (host/send_scene.py)
+      String nm = cmdIn.readStringUntil(',');
+      nm.trim();
+      long f = cmdIn.parseInt();
+      receiveSceneFace(nm.c_str(), nm.length() ? f : -1);
+      break;
+    }
+    case 'v': {  // #v<組>,<から>[,<まで>[,<秒>]] 名前つきのシーンの日付のコマを描く。<まで> があれば止めるまで繰り返す (scene_names.h)
+      String args = cmdIn.readStringUntil('\n');
+      viewScenes(args.c_str());
       break;
     }
     case 'C': cardTest(cmdIn.parseInt()); break;  // #C[<MHz>] microSD (Sense の拡張ボード) を読み書きして速さを測る
