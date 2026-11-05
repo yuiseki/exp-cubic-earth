@@ -1957,9 +1957,10 @@ bool assignFace(int x) {
 
 // ---- #z 消灯中の消費を 1 つずつ止めて測る (power_cmd.h) ----
 bool pwrW = false, pwrL = false, pwrP = false, pwrC = false;
+bool pwrS = false, blBeforeSleep = true;  // #zs1 で眠っているか、眠る前のバックライト
 
 void powerStatus() {
-  Serial.printf("cmd z: wifi sleep %d, lt7680 sleep %d, panel sleep %d, cpu %lu MHz, backlight %s\n", pwrW, pwrL, pwrP,
+  Serial.printf("cmd z: display asleep %d, wifi sleep %d, lt7680 sleep %d, panel sleep %d, cpu %lu MHz, backlight %s\n", pwrS, pwrW, pwrL, pwrP,
                 (unsigned long)getCpuFrequencyMhz(), bl ? "on" : "off");
 }
 
@@ -2001,14 +2002,33 @@ void panelPower(bool save) {
   curBoard = keep;
 }
 
+// #zs1: バックライトを消してから液晶、LT7680 の順に眠らせる。#zs0: LT7680、液晶の順に起こし、バックライトを前に戻す
+void displaySleep(bool save) {
+  if (save == pwrS) return;
+  if (save) {
+    blBeforeSleep = bl;
+    bl = false;
+    applyBacklight();
+    if (!pwrP) { panelPower(true); pwrP = true; }
+    if (!pwrL) { ltPower(true); pwrL = true; }
+  } else {
+    if (pwrL) { ltPower(false); pwrL = false; }
+    if (pwrP) { panelPower(false); pwrP = false; }
+    bl = blBeforeSleep;
+    applyBacklight();
+  }
+  pwrS = save;
+}
+
 void powerCmd(const PowerArg &a) {
-  if (!a.ok) { Serial.println("cmd z: use #z, #zw<0|1>, #zl<0|1>, #zp<0|1>, #zc<0|1>"); return; }
+  if (!a.ok) { Serial.println("cmd z: use #z, #zs<0|1>, #zw<0|1>, #zl<0|1>, #zp<0|1>, #zc<0|1>"); return; }
   bool on = a.on == 1;
   switch (a.what) {
     case 'w': WiFi.setSleep(on); pwrW = on; break;
     case 'l': if (on != pwrL) ltPower(on); pwrL = on; break;
     case 'p': if (on != pwrP) panelPower(on); pwrP = on; break;
     case 'c': setCpuFrequencyMhz(on ? 80 : 240); pwrC = on; break;
+    case 's': displaySleep(on); break;
     default: break;
   }
   powerStatus();
@@ -2031,6 +2051,7 @@ void loop() {
     return;
   }
   armed = false;
+  if (pwrS && c != 'z') { Serial.println("cmd z: waking the display first"); displaySleep(false); }  // 眠ったまま描くと届かない
   switch (c) {
     case '0': case '1': case '2':
       if (c - '0' < NUM_BOARDS) { curBoard = c - '0'; Serial.printf("cmd %c: board %d selected\n", c, curBoard); }

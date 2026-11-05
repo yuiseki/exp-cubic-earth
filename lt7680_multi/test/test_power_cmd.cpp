@@ -10,7 +10,7 @@ int main() {
   a = parsePowerArg(" \r\n");
   assert(a.ok && a.what == 0);
   // each target takes 1 (save power) or 0 (back to normal)
-  const char *targets = "wlpc";
+  const char *targets = "wlpcs";
   for (const char *t = targets; *t; t++) {
     char s[4] = {*t, '1', 0, 0};
     a = parsePowerArg(s);
