@@ -65,3 +65,17 @@ def test_spot_takes_the_least_land_when_no_place_is_clear():
     land[30:45, 5:25] = False  # one patch of sea
     x, y = ly.spot(land, 20, 15, margin=2)
     assert land[y:y + 15, x:x + 20].sum() == 0
+
+
+def test_spot_goes_to_the_preferred_corner_among_clear_places():
+    land = np.zeros((100, 100), dtype=bool)
+    land[60:, 60:] = True  # the lower right corner is land
+    x, y = ly.spot(land, 20, 10, margin=2, toward=(1, 1))
+    assert not land[y:y + 10, x:x + 20].any()
+    assert x + 20 >= 90 or y + 10 >= 90  # pushed against the right or the bottom edge
+    x2, y2 = ly.spot(np.zeros((100, 100), dtype=bool), 20, 10, margin=2, toward=(1, 0))
+    assert (x2, y2) == (100 - 2 - 20, 2)  # top right
+
+
+def test_every_side_face_has_a_corner():
+    assert len(ly.CORNERS) == 4 and ly.CORNERS[0] == (1, 0) and ly.CORNERS[1:] == [(1, 1)] * 3
