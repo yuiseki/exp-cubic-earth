@@ -9,8 +9,9 @@ pixel is 0.19 degrees), uint16, kelvin = dn x 0.02, 0 where there is no value (t
 LST (NASA), via JAXA Earth API". JAXA's terms ask for the source on anything made public.
 
 Land takes a fixed colour scale from T_MIN to T_MAX (the same for all 24, so the frames compare), the sea
-and land without a value keep the Blue Marble, dimmed. Face 1 (centred on 130 W, the eastern Pacific)
-carries the half-month, the scale and the credit in its lower half, which is open sea. Writes <OUT>/<k>/face0-5.bin for k = 1..24 (January
+and land without a value keep the Blue Marble, dimmed. Each of the four side faces has
+sea somewhere, so each carries a small window (the half-month, the scale, the credit) where no
+half-month of the year has land (spot), the same place in all 24. Writes <OUT>/<k>/face0-5.bin for k = 1..24 (January
 first half = 1, as #s scenes go after them), <OUT>/<k>/faces.png, and <OUT>/sheet.png (all 24, face 1).
 The GeoTIFFs are kept in <OUT>/src and not fetched again.
 """
@@ -32,7 +33,7 @@ STOPS = [(-40, (70, 20, 140)), (-20, (30, 80, 220)), (0, (60, 190, 240)), (10, (
          (20, (240, 230, 60)), (30, (250, 150, 30)), (45, (220, 40, 20)), (60, (110, 0, 20))]
 FONT = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
 SEA_DIM = 0.7
-LEGEND_FACE = 1  # centred on 130 W: the lower half is open sea
+WIN_W, WIN_H = 200, 112  # the information window, at 480 px a face
 
 
 def half_months():
@@ -84,24 +85,39 @@ def fetch(url, path):
     return tifffile.imread(path, key=0)
 
 
-def legend(face_img, text, n):
-    """The half-month, what is shown, the colour scale and the credit across the lower half of a face."""
+def spot(land, w, h, margin=8, step=4):
+    """Top-left (x, y) of the w x h box, inside the margin, that covers the least land
+    (every step pixels, then pixel by pixel around the best)."""
+    n_y, n_x = land.shape
+    c = np.pad(land.astype(np.int32), ((1, 0), (1, 0))).cumsum(0).cumsum(1)  # summed-area table
+    xs, ys = range(margin, n_x - margin - w + 1), range(margin, n_y - margin - h + 1)
+
+    def best_of(cands):
+        return min((c[y + h, x + w] - c[y, x + w] - c[y + h, x] + c[y, x], x, y) for x, y in cands)
+
+    _, bx, by = best_of((x, y) for y in ys[::step] for x in xs[::step])
+    _, bx, by = best_of((x, y) for y in ys if abs(y - by) < step for x in xs if abs(x - bx) < step)
+    return bx, by
+
+
+def window(face_img, text, x, y, n):
+    """A small box at (x, y) (WIN_W x WIN_H at 480 px): the half-month, the colour scale, the credit."""
     im = Image.fromarray(np.clip(face_img, 0, 255).astype(np.uint8))
     d = ImageDraw.Draw(im)
     s = n / 480
-    f = lambda px: ImageFont.truetype(FONT, int(px * s))
-    x0, x1 = int(50 * s), int(430 * s)
-    d.text((n // 2, int(250 * s)), text, font=f(72), fill=(255, 255, 255), anchor="ma")
-    d.text((n // 2, int(338 * s)), "昼の地表の温度 (℃)", font=f(24), fill=(255, 255, 255), anchor="ma")
-    y = int(376 * s)
+    f = lambda px: ImageFont.truetype(FONT, max(8, int(px * s)))
+    w, h = int(WIN_W * s), int(WIN_H * s)
+    d.rectangle([x, y, x + w - 1, y + h - 1], fill=(0, 0, 0), outline=(110, 110, 110))
+    d.text((x + w // 2, y + int(2 * s)), text, font=f(30), fill=(255, 255, 255), anchor="ma")
+    d.text((x + w // 2, y + int(40 * s)), "昼の地表の温度 (℃)", font=f(13), fill=(255, 255, 255), anchor="ma")
+    x0, x1, by = x + int(12 * s), x + w - int(12 * s), y + int(60 * s)
     bar = colours(np.linspace(T_MIN, T_MAX, x1 - x0)).astype(np.uint8)
     for i, c in enumerate(bar):
-        d.line([x0 + i, y, x0 + i, y + int(24 * s)], fill=tuple(int(v) for v in c))
+        d.line([x0 + i, by, x0 + i, by + int(12 * s)], fill=tuple(int(v) for v in c))
     for t in (-40, -20, 0, 20, 40, 60):
-        x = x0 + (t - T_MIN) / (T_MAX - T_MIN) * (x1 - x0 - 1)
-        d.line([x, y + int(24 * s), x, y + int(31 * s)], fill=(255, 255, 255))
-        d.text((x, y + int(33 * s)), f"{t}", font=f(20), fill=(255, 255, 255), anchor="ma")
-    d.text((n // 2, int(450 * s)), "MODIS LST 2012-2021 (NASA), JAXA Earth", font=f(14), fill=(200, 200, 200), anchor="ma")
+        tx = x0 + (t - T_MIN) / (T_MAX - T_MIN) * (x1 - x0 - 1)
+        d.text((tx, by + int(14 * s)), f"{t}", font=f(12), fill=(255, 255, 255), anchor="ma")
+    d.text((x + w // 2, y + h - int(15 * s)), "MODIS LST (NASA), JAXA Earth", font=f(10), fill=(170, 170, 170), anchor="ma")
     return np.asarray(im, dtype=np.float32)
 
 
@@ -114,19 +130,28 @@ def main():
     src = os.path.join(args.out, "src")
     os.makedirs(src, exist_ok=True)
     n = args.size
-    base = None
-    sheet = Image.new("RGB", (6 * n // 2, 4 * n // 2))
-    for k, mmdd in enumerate(half_months(), start=1):
+    centres = [(args.lon0 + 90 * i, 0) for i in range(4)] + [(args.lon0, 90), (args.lon0, -90)]
+    hms = half_months()
+    lsts = []
+    for mmdd in hms:
         w, e = (fetch(u, os.path.join(src, f"{mmdd}-{u.rsplit('/', 1)[1]}")) for u in tif_urls(mmdd))
-        lst = celsius(join(w, e))
-        if base is None:
-            h, wd = lst.shape
-            bm = Image.open(clouds.BLUE_MARBLE).convert("RGB").resize((wd, h), Image.BILINEAR)
-            base = np.asarray(bm, dtype=np.float32) * SEA_DIM
+        lsts.append(celsius(join(w, e)))
+    # land anywhere in the year, on each side face: the windows sit where none of the 24 has land
+    ever = np.zeros(lsts[0].shape, dtype=np.float32)
+    for lst in lsts:
+        ever = np.maximum(ever, (~np.isnan(lst)).astype(np.float32))
+    ws = int(WIN_W * n / 480), int(WIN_H * n / 480)
+    spots = [spot(clouds.face(np.repeat(ever[..., None], 3, 2), lo, la, n)[..., 0] > 0.01, *ws, margin=n // 40)
+             for lo, la in centres[:4]]
+    h, wd = lsts[0].shape
+    bm = Image.open(clouds.BLUE_MARBLE).convert("RGB").resize((wd, h), Image.BILINEAR)
+    base = np.asarray(bm, dtype=np.float32) * SEA_DIM
+    sheet = Image.new("RGB", (6 * n // 2, 4 * n // 2))
+    for k, (mmdd, lst) in enumerate(zip(hms, lsts), start=1):
         img = picture(lst, base)
-        centres = [(args.lon0 + 90 * i, 0) for i in range(4)] + [(args.lon0, 90), (args.lon0, -90)]
         faces = [clouds.face(img, lo, la, n) for lo, la in centres]
-        faces[LEGEND_FACE] = legend(faces[LEGEND_FACE], label(mmdd), n)
+        for i, (x, y) in enumerate(spots):
+            faces[i] = window(faces[i], label(mmdd), x, y, n)
         out = os.path.join(args.out, str(k))
         os.makedirs(out, exist_ok=True)
         for i, f in enumerate(faces):
@@ -135,9 +160,10 @@ def main():
         for i, (cx, cy) in {0: (0, 1), 1: (1, 1), 2: (2, 1), 3: (3, 1), 4: (0, 0), 5: (0, 2)}.items():
             cross.paste(Image.fromarray(np.clip(faces[i], 0, 255).astype(np.uint8)), (cx * n, cy * n))
         cross.save(os.path.join(out, "faces.png"))
-        tile = Image.fromarray(np.clip(faces[LEGEND_FACE], 0, 255).astype(np.uint8)).resize((n // 2, n // 2))
+        tile = Image.fromarray(np.clip(faces[1], 0, 255).astype(np.uint8)).resize((n // 2, n // 2))
         sheet.paste(tile, ((k - 1) % 6 * n // 2, (k - 1) // 6 * n // 2))
         print(f"{k:2d} {mmdd} {label(mmdd)}: land {np.nanmin(lst):.0f} to {np.nanmax(lst):.0f} C", flush=True)
+    print("windows (x, y) on faces 0-3:", spots)
     sheet.save(os.path.join(args.out, "sheet.png"))
 
 

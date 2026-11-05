@@ -50,3 +50,18 @@ def test_picture_keeps_the_sea_from_the_base_and_paints_land():
     img = ly.picture(lst, base)
     assert (img[0, 0] == 7.0).all()
     assert (img[0, 1] == ly.colours(np.array([40.0]))[0]).all()
+
+
+def test_spot_avoids_land_and_stays_inside():
+    land = np.zeros((100, 100), dtype=bool)
+    land[:, :60] = True  # land on the left, sea on the right
+    x, y = ly.spot(land, 30, 20, margin=4)
+    assert x >= 60 and x + 30 <= 100 - 4 and 4 <= y and y + 20 <= 100 - 4
+    assert not land[y:y + 20, x:x + 30].any()
+
+
+def test_spot_takes_the_least_land_when_no_place_is_clear():
+    land = np.ones((50, 50), dtype=bool)
+    land[30:45, 5:25] = False  # one patch of sea
+    x, y = ly.spot(land, 20, 15, margin=2)
+    assert land[y:y + 15, x:x + 20].sum() == 0
