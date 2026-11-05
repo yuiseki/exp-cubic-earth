@@ -201,6 +201,27 @@ ssh pi5-deck "~/.venv-esptool/bin/python tmp/cubic-clouds/send_faces.py $PORT tm
 - その黒い所は、SSEC RealEarth の 1 時間ごとの全球赤外合成 (`globalir`、表記「Source: SSEC RealEarth, UW-Madison」が要る) の雲を、雲の無い Blue Marble に白く重ねて埋める。RealEarth の `/api/image` は Web メルカトル (GeoTIFF で確認) で、85 度まで、透かしなしは幅 1024 画素まで (1280 で「Size limit exceeded」の透かし)。85 度より先は 85 度の輪の平均の色。極夜では凍った海も冷たく、雲と同じく白く写る
 - `#U<面>` は面の画像を 4096 バイトずつ受けて PSRAM に置き (ビルドに `PSRAM=opi` が要る)、以後その面は焼き込みの地球の代わりに使う。1 面約 2〜2.6 秒。`#u` で焼き込みに戻す
 
+## 名前つきのシーンと日付のコマの再生 (`#v`、`scene_names.h`)
+
+シーンは数字のほかに名前でも置ける: `/scenes/<名前>/face<f>.bin` (名前は小文字・数字・`-` を `/` でつないだもの、63 文字まで)。数字のシーン k は名前 "k" と同じ場所なので、`#s<k>` は今までどおり。
+
+```sh
+#w<名前>,<面>                    # 面を受けて /scenes/<名前>/ に書く (send_scene.py。数字も可)
+#v<組>,<から>                    # /scenes/<組>/<YYYY-MM-DD>/ のうち <から> に合うコマを 1 回描く (#vshikisai-lst,2025-07-01)
+#v<組>,<から>,<まで>[,<秒>]       # 範囲のコマを <秒> (既定 5) ごとに、次の命令が来るまで繰り返す (#vshikisai-lst,2025-01,2026-10,5)
+```
+
+<から> と <まで> は YYYY、YYYY-MM、YYYY-MM-DD のどれでもよく、前の部分が合えば入る ("2025-01" は 1 月の 2 コマとも)。コマは名前の順 (日付の順)。ループ中にシリアルか ESP-NOW で命令が届くと、そのコマで止めてその命令に譲る。中継からも送れるので、キューブだけで回り続ける (母艦は要らない)。1 コマの切り替えは 2.7〜3.3 秒。
+
+しきさいの昼の地表の温度 (GCOM-C SGLI、半月ごと、JAXA Earth の STAC) を組 `shikisai-lst` として作って書く:
+
+```sh
+# 母艦: 1 コマ 1 ディレクトリ (~/Workspaces/tmp/cubic-shikisai-lst/<YYYY-MM-DD>/)、窓に年と出典「GCOM-C/SGLI (JAXA)」
+uv run -q --no-project --with numpy --with pillow --with pyproj --with tifffile python -I host/lst_year.py --set shikisai-lst --from 2025-01-01 --to 2026-10-01
+# pi4-deck: 各モジュールが映す 3 面だけ (北極側 0 4 3、南極側 1 5 2)。43 コマで約 5 分
+python3 send_scene.py $PORT shikisai-lst shikisai-lst 0 4 3 --tree
+```
+
 ## 毎日の雲 (`host/daily_clouds.py`)
 
 毎日 14:20 (UTC 5:20) に、abeat のジョブ `cubic-clouds-daily` が、前日 (UTC) の `clouds.py` の出力を `https://z.yuiseki.net/static/tmp/cubic-earth/clouds/<YYYY-MM-DD>/` に置く (母艦の `/sata_hdd_24tb/www/html/static/tmp/cubic-earth/clouds/`)。中身は GIBS の元画像、極の赤外 2 枚、`face0-5.bin`、`faces.png` で、1 日約 8MB。`latest.txt` に一番新しい日付。
