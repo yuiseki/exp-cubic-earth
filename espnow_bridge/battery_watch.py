@@ -86,6 +86,8 @@ def main():
     ap.add_argument("--until", help="stop at this local time (ISO), default: run until killed")
     ap.add_argument("--loads", default="G", help="kinds to pick from at random each cycle: t G v j (default G, as before)")
     ap.add_argument("--seed", type=int, help="random seed (default: from the clock)")
+    ap.add_argument("--ping-wait", type=float, default=10, help="seconds to wait for the pings after #p: a module still\n"
+                    "finishing a #v scene or a #G set-up answers late (the north one took over 3 s, 2026-11-05)")
     args = ap.parse_args()
     until = dt.datetime.fromisoformat(args.until) if args.until else None
     rng = random.Random(args.seed)
@@ -101,7 +103,7 @@ def main():
             kind, cmd = pick_load(rng, args.show, args.loads)
             g = send_all(port, args.macs, cmd, 1.5)
             time.sleep(max(0.0, args.show + 6 - (time.time() - t0)))  # #G and #t set up for 2-4.3 s, then run SHOW s
-            p = send_all(port, args.macs, "#p", 3)
+            p = send_all(port, args.macs, "#p", args.ping_wait)
             row = [now, kind]
             for m in args.macs:
                 row += [int(acked(g, m)), int(acked(p, m)), int(pinged(p, m))]
