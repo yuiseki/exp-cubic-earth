@@ -31,6 +31,7 @@
 #include "backlight_cmd.h"
 #include "web_faces.h"
 #include "flight_track.h"
+#include "icons.h"
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <JPEGDEC.h>
@@ -820,6 +821,7 @@ SpriteGeom spriteGeom(const GMover &m, int q) {
 // スプライトの (x, y) の色 (透明なら KEY)
 uint16_t spritePixel(const GMover &m, int q, const SpriteGeom &g, int x, int y) {
   uint16_t col = m.ship ? 0xFFFF : 0xFFE0;
+  if (m.icon) return iconPixel(m.ship, m.dir, x - g.mx, y - g.my) ? col : KEY;
   int s = m.size, c = s / 2, dx = x - g.mx, dy = y - g.my;
   if (dx >= 0 && dy >= 0 && dx < s && dy < s && (m.ship || abs(dx - c) <= 1 || abs(dy - c) <= 1)) return col;
   int W = strlen(m.label) * 5, u = x - g.lx, v = y - g.ly, tx, ty;
@@ -878,7 +880,8 @@ static inline const int16_t *flightKeys(const FlightSet &fs, int i) {
 }
 
 // fs があれば、架空の飛行機の代わりに本物の便を、1 日を dayMs で回して動かす (#t)。ss があれば本物の船も同じ時計で動かす。
-// ラベルは出さない (便は数千あり、1 機ずつのスプライトはページに収まらないので、飛行機は全機がブロック 0、船はブロック 1 の印を使う)
+// ラベルは出さない。便は数千あり、1 機ずつのスプライトはページに収まらないので、飛行機は向き (icons.h の 8 方向) ごとに
+// ブロック 0〜7、船はブロック 8 の絵を使う。向きは半キー先の位置をパネルの画素に直して、今の位置との差から決める
 void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32_t burstHz, const FlightSet *fs = nullptr, uint32_t dayMs = 0,
                 const FlightSet *ss = nullptr) {
   if (fs) labels = false;
@@ -889,7 +892,8 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
   randomSeed(esp_random());
   for (int k = 0; k < N && fs; k++) {
     m[k].ship = k >= PLANES;
-    m[k].size = m[k].ship ? 5 : 7;
+    m[k].size = ICON_N;
+    m[k].icon = true;
     m[k].hidden = true;
     for (int pg = 0; pg < 2; pg++) m[k].rb[pg] = -1;
   }
@@ -926,11 +930,15 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
     bteCopy(2, 0, 0, 1, 0, 0, 480, 480);
     regCacheClear();
     drawToPage(SHEET_PAGE);
-    for (int k = 0; k < (fs ? 2 : N); k++) {  // 本物は飛行機がブロック 0、船がブロック 1 の印を使う
+    for (int k = 0; k < (fs ? 9 : N); k++) {  // 本物は飛行機が向きごとにブロック 0〜7、船がブロック 8 の絵を使う
       int bx = (k % BLOCKS_PER_ROW) * BLOCK_W, by = (k / BLOCKS_PER_ROW) * BLOCK_H;
       for (int q = 0; q < 4; q++) {
-        const GMover &o = fs ? m[k ? PLANES : 0] : m[k];
-        if (fs && k && !SHIPS) break;
+        GMover ic = {};
+        ic.size = ICON_N;
+        ic.icon = true;
+        ic.ship = k == 8;
+        ic.dir = k & 7;
+        const GMover &o = fs ? ic : m[k];
         SpriteGeom g = spriteGeom(o, q);
         streamPixels(bx + g.ox, by + g.oy, g.w, g.h, [&](int x, int y) { return spritePixel(o, q, g, x, y); });
         if (!labels) break;  // ラベルが無ければ向きは要らない
@@ -950,9 +958,11 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
     uint32_t f0 = micros();
     int back = 1 - front;
     RegBurst burst(burstHz);  // このコマはレジスタと BTE だけなので、SPI を握ったまま速く回す
+    float tk = 0;
     if (fs) {  // 本物の便: 今の時刻のキー位置で、前後のキーフレームの間を補う
       uint32_t now = millis() - t0;
-      float tk = ftKeyAt(now, fs->h.keys, dayMs), sk = ss ? ftKeyAt(now, ss->h.keys, dayMs) : 0;
+      tk = ftKeyAt(now, fs->h.keys, dayMs);
+      float sk = ss ? ftKeyAt(now, ss->h.keys, dayMs) : 0;
       for (int i = 0; i < N; i++) {
         float lat = 0, lon = 0;
         bool ship = i >= PLANES;
@@ -983,6 +993,15 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
       GMover &o = m[i];
       if (o.hidden) o.nb = -1;
       else locate(o.p, o.size, &o.nb, &o.cx, &o.cy, &o.f, &o.fx, &o.fy);
+      if (fs && !o.ship && o.nb >= 0) {  // 向き: 半キー先の位置が同じ基板に載れば、その差から。載らなければ前の向きのまま
+        float lat, lon, v[3];
+        int b2, x2, y2, f2, fx2, fy2;
+        if (ftPosition(flightKeys(*fs, i), fs->h.keys, tk + 0.5f, &lat, &lon)) {
+          qscFromLatLon(lat, lon, v);
+          locate(v, o.size, &b2, &x2, &y2, &f2, &fx2, &fy2);
+          if (b2 == o.nb && (x2 != o.cx || y2 != o.cy)) o.dir = iconDir(x2 - o.cx, y2 - o.cy);
+        }
+      }
       o.q = (o.nb >= 0 && labels) ? southOnPanel(o.p, o.nb) : 0;
       o.eb = o.rb[back];
       o.ex = o.rx[back];
@@ -1009,7 +1028,7 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
         GMover &o = m[i];
         if (o.nb != b) continue;
         SpriteGeom g = spriteGeom(o, o.q);
-        int blk = fs ? (o.ship ? 1 : 0) : i, sx = (blk % BLOCKS_PER_ROW) * BLOCK_W + g.ox, sy = (blk / BLOCKS_PER_ROW) * BLOCK_H + g.oy;
+        int blk = fs ? (o.ship ? 8 : o.dir) : i, sx = (blk % BLOCKS_PER_ROW) * BLOCK_W + g.ox, sy = (blk / BLOCKS_PER_ROW) * BLOCK_H + g.oy;
         int dx = o.cx - o.size / 2 - g.mx, dy = o.cy - o.size / 2 - g.my;
         bteBlit(SHEET_PAGE, sx, sy, back, dx, dy, g.w, g.h, true);
         o.rx[back] = max(dx, 0);
