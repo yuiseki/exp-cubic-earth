@@ -329,6 +329,7 @@ ssh pi5-deck "printf '#E' > $PORT; sleep 6; ~/.venv-esptool/bin/python tmp/send_
 
 | 命令 | 止めるもの |
 |---|---|
+| `#zs1` | 表示をまとめて眠らせる。バックライトを消し、液晶、LT7680 の順に眠らせる。`#zs0` で逆の順に起こし、バックライトを眠る前の状態に戻す。無線はつけたままなので、中継器から起こせる。眠っている間に `#z` 以外の命令が来たら、先に起こしてから実行する |
 | `#zw1` | 無線の省電力 (`WiFi.setSleep(true)`)。ESP-NOW を取りこぼすかもしれない |
 | `#zc1` | CPU を 80MHz に (`#zc0` で 240MHz) |
 | `#zp1` | 液晶 ST7701S を DISPOFF と SLPIN で眠らせる (`#zp0` で SLPOUT と DISPON) |
