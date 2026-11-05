@@ -115,15 +115,15 @@ def window(face_img, text, x, y, n):
     f = lambda px: ImageFont.truetype(FONT, max(8, int(px * s)))
     w, h = int(200 * s), int(112 * s)
     d.rectangle([x, y, x + w - 1, y + h - 1], fill=(0, 0, 0), outline=(110, 110, 110))
-    d.text((x + w // 2, y + int(2 * s)), text, font=f(30), fill=(255, 255, 255), anchor="ma")
-    d.text((x + w // 2, y + int(40 * s)), "昼の地表の温度 (℃)", font=f(13), fill=(255, 255, 255), anchor="ma")
-    x0, x1, by = x + int(12 * s), x + w - int(12 * s), y + int(60 * s)
+    d.text((x + w // 2, y + int(4 * s)), text, font=f(24), fill=(255, 255, 255), anchor="ma")
+    d.text((x + w // 2, y + int(36 * s)), "昼の地表の温度 (℃)", font=f(19), fill=(255, 255, 255), anchor="ma")
+    x0, x1, by = x + int(20 * s), x + w - int(20 * s), y + int(63 * s)
     bar = colours(np.linspace(T_MIN, T_MAX, x1 - x0)).astype(np.uint8)
     for i, c in enumerate(bar):
-        d.line([x0 + i, by, x0 + i, by + int(12 * s)], fill=tuple(int(v) for v in c))
+        d.line([x0 + i, by, x0 + i, by + int(10 * s)], fill=tuple(int(v) for v in c))
     for t in (-40, -20, 0, 20, 40, 60):
         tx = x0 + (t - T_MIN) / (T_MAX - T_MIN) * (x1 - x0 - 1)
-        d.text((tx, by + int(14 * s)), f"{t}", font=f(12), fill=(255, 255, 255), anchor="ma")
+        d.text((tx, by + int(12 * s)), f"{t}", font=f(12), fill=(255, 255, 255), anchor="ma")
     d.text((x + w // 2, y + h - int(15 * s)), "MODIS LST (NASA), JAXA Earth", font=f(10), fill=(170, 170, 170), anchor="ma")
     return np.asarray(im, dtype=np.float32)
 
