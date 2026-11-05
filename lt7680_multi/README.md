@@ -201,6 +201,20 @@ ssh pi5-deck "~/.venv-esptool/bin/python tmp/cubic-clouds/send_faces.py $PORT tm
 - その黒い所は、SSEC RealEarth の 1 時間ごとの全球赤外合成 (`globalir`、表記「Source: SSEC RealEarth, UW-Madison」が要る) の雲を、雲の無い Blue Marble に白く重ねて埋める。RealEarth の `/api/image` は Web メルカトル (GeoTIFF で確認) で、85 度まで、透かしなしは幅 1024 画素まで (1280 で「Size limit exceeded」の透かし)。85 度より先は 85 度の輪の平均の色。極夜では凍った海も冷たく、雲と同じく白く写る
 - `#U<面>` は面の画像を 4096 バイトずつ受けて PSRAM に置き (ビルドに `PSRAM=opi` が要る)、以後その面は焼き込みの地球の代わりに使う。1 面約 2〜2.6 秒。`#u` で焼き込みに戻す
 
+## 毎日の雲 (`host/daily_clouds.py`)
+
+毎日 14:20 (UTC 5:20) に、abeat のジョブ `cubic-clouds-daily` が、前日 (UTC) の `clouds.py` の出力を `https://z.yuiseki.net/static/tmp/cubic-earth/clouds/<YYYY-MM-DD>/` に置く (母艦の `/sata_hdd_24tb/www/html/static/tmp/cubic-earth/clouds/`)。中身は GIBS の元画像、極の赤外 2 枚、`face0-5.bin`、`faces.png` で、1 日約 8MB。`latest.txt` に一番新しい日付。
+
+- GIBS は 1 日 1 枚 (極軌道の衛星が昼の側を撮ってつないだもの)。日の終わりの数時間あとまで撮影分が足されるので、日が終わって 5 時間たってから取る
+- 毎回、直近 3 日のうち `faces.png` の無い日を作る。隠しディレクトリで作ってから名前を変えるので、作りかけは公開されない。失敗した分は隠しディレクトリに残り、次の回で取り直す
+- ログは `~/logs/clouds-daily.log`。テストは `host/test_daily_clouds.py`
+
+```sh
+# その日の 6 面を microSD のシーン 1 に書く (pi4-deck から USB)
+scp -r z:/sata_hdd_24tb/www/html/static/tmp/cubic-earth/clouds/2026-11-03 pi4-deck:cubic-power/
+ssh pi4-deck "cd ~/cubic-power && python3 send_scene.py $PORT 2026-11-03 1"
+```
+
 ## 昼と夜と半透明の雲 (`host/scene_compose.py`)
 
 昼は雲の無い Blue Marble、夜は NASA Black Marble 2016 (GIBS の `VIIRS_Black_Marble`、街の灯り)、その上に雲を半透明で重ねた 6 面を作る (`face0-5.bin` と `faces.png`)。microSD のシーンとして `send_scene.py` で書く。
