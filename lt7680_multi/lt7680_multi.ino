@@ -881,7 +881,8 @@ static inline const int16_t *flightKeys(const FlightSet &fs, int i) {
 
 // fs があれば、架空の飛行機の代わりに本物の便を、1 日を dayMs で回して動かす (#t)。ss があれば本物の船も同じ時計で動かす。
 // ラベルは出さない。便は数千あり、1 機ずつのスプライトはページに収まらないので、飛行機は向き (icons.h の 8 方向) ごとに
-// ブロック 0〜7、船はブロック 8 の絵を使う。向きは半キー先の位置をパネルの画素に直して、今の位置との差から決める
+// ブロック 0〜7、船は船底を南へ向けた 4 向きのブロック 8〜11 の絵を使う。飛行機の向きは半キー先の位置をパネルの画素に直して、
+// 今の位置との差から決める
 void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32_t burstHz, const FlightSet *fs = nullptr, uint32_t dayMs = 0,
                 const FlightSet *ss = nullptr) {
   if (fs) labels = false;
@@ -930,14 +931,14 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
     bteCopy(2, 0, 0, 1, 0, 0, 480, 480);
     regCacheClear();
     drawToPage(SHEET_PAGE);
-    for (int k = 0; k < (fs ? 9 : N); k++) {  // 本物は飛行機が向きごとにブロック 0〜7、船がブロック 8 の絵を使う
+    for (int k = 0; k < (fs ? 12 : N); k++) {  // 本物は飛行機が向きごとにブロック 0〜7、船が 4 向きのブロック 8〜11 の絵を使う
       int bx = (k % BLOCKS_PER_ROW) * BLOCK_W, by = (k / BLOCKS_PER_ROW) * BLOCK_H;
       for (int q = 0; q < 4; q++) {
         GMover ic = {};
         ic.size = ICON_N;
         ic.icon = true;
-        ic.ship = k == 8;
-        ic.dir = k & 7;
+        ic.ship = k >= 8;
+        ic.dir = k < 8 ? k : 2 * (k - 8);
         const GMover &o = fs ? ic : m[k];
         SpriteGeom g = spriteGeom(o, q);
         streamPixels(bx + g.ox, by + g.oy, g.w, g.h, [&](int x, int y) { return spritePixel(o, q, g, x, y); });
@@ -993,6 +994,7 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
       GMover &o = m[i];
       if (o.hidden) o.nb = -1;
       else locate(o.p, o.size, &o.nb, &o.cx, &o.cy, &o.f, &o.fx, &o.fy);
+      if (fs && o.ship && o.nb >= 0) o.dir = shipDirForSouth(southOnPanel(o.p, o.nb));  // 船底を南へ
       if (fs && !o.ship && o.nb >= 0) {  // 向き: 半キー先の位置が同じ基板に載れば、その差から。載らなければ前の向きのまま
         float lat, lon, v[3];
         int b2, x2, y2, f2, fx2, fy2;
@@ -1028,7 +1030,7 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
         GMover &o = m[i];
         if (o.nb != b) continue;
         SpriteGeom g = spriteGeom(o, o.q);
-        int blk = fs ? (o.ship ? 8 : o.dir) : i, sx = (blk % BLOCKS_PER_ROW) * BLOCK_W + g.ox, sy = (blk / BLOCKS_PER_ROW) * BLOCK_H + g.oy;
+        int blk = fs ? (o.ship ? 8 + o.dir / 2 : o.dir) : i, sx = (blk % BLOCKS_PER_ROW) * BLOCK_W + g.ox, sy = (blk / BLOCKS_PER_ROW) * BLOCK_H + g.oy;
         int dx = o.cx - o.size / 2 - g.mx, dy = o.cy - o.size / 2 - g.my;
         bteBlit(SHEET_PAGE, sx, sy, back, dx, dy, g.w, g.h, true);
         o.rx[back] = max(dx, 0);
