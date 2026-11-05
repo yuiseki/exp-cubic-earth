@@ -1,6 +1,6 @@
 """Play microSD scenes first..last as a flip-book through the ESP-NOW bridge (both modules at once).
 
-    python play_scenes.py BRIDGE_PORT FIRST LAST [--sec 5] [--loops 1]
+    python play_scenes.py BRIDGE_PORT FIRST LAST [--sec 5] [--loops 1]     (--loops 0: round and round until Ctrl-C)
 
 Sends "#s<k>" for each scene, one every --sec seconds. A switch takes about 2.7 s on the cube (each
 board reads its face from the microSD, about 0.3 s, then draws it, about 0.6 s), so --sec below 3
@@ -8,12 +8,16 @@ queues lines faster than the cube draws them. lst_year.py's 24 half-months live 
     python play_scenes.py /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_68:EE:8F:4B:1E:84-if00 101 124
 """
 import argparse
+import itertools
 import time
 
 
 def lines(first, last, loops=1):
+    """The lines to send; loops=0 goes round until stopped (Ctrl-C)."""
     one = [f"#s{k}" for k in range(first, last + 1)]
-    return one if first == last else one * loops
+    if first == last:
+        return one
+    return itertools.cycle(one) if loops == 0 else one * loops
 
 
 def play(ls, sec, send, sleep=time.sleep):
@@ -31,7 +35,7 @@ def main():
     ap.add_argument("first", type=int)
     ap.add_argument("last", type=int)
     ap.add_argument("--sec", type=float, default=5.0)
-    ap.add_argument("--loops", type=int, default=1)
+    ap.add_argument("--loops", type=int, default=1, help="0: until stopped")
     a = ap.parse_args()
     p = serial.Serial(a.port, 115200, timeout=0.2)
 

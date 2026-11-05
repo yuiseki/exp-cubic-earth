@@ -14,3 +14,8 @@ def test_play_waits_between_lines_not_after_the_last():
     sent, slept = [], []
     ps.play(["#s1", "#s2"], 4.0, send=sent.append, sleep=slept.append)
     assert sent == ["#s1", "#s2"] and slept == [4.0]
+
+
+def test_loops_zero_goes_round_until_stopped():
+    import itertools
+    assert list(itertools.islice(ps.lines(101, 102, loops=0), 5)) == ["#s101", "#s102", "#s101", "#s102", "#s101"]
