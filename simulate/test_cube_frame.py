@@ -76,3 +76,30 @@ def test_no_slot_breaks_through_an_outer_face():
         p[a] = rng.choice([-1, 1]) * (H - rng.uniform(0, cf.WALL * 0.9))
         for _, (lo, hi) in cf.slot_boxes():
             assert not (np.all(p > lo) and np.all(p < hi)), p
+
+
+def _numbers(env_extra):
+    """SIZE, OUT_EDGE and BUILD as a fresh interpreter sees them (the constants are computed at import)."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    code = "import cube_frame as c, json; print(json.dumps([c.sb.SIZE, c.OUT_EDGE, c.BUILD]))"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CUBE_FRAME_")}
+    env.update(env_extra)
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env, cwd=os.path.dirname(__file__) or ".")
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_a_deeper_slot_grows_the_section_inward_and_keeps_the_outer_edge():
+    size0, edge0, build0 = _numbers({})
+    size1, edge1, build1 = _numbers({"CUBE_FRAME_DEPTH": "3.5"})
+    assert size1 == pytest.approx(size0 + 1.0)  # DEPTH 2.5 -> 3.5
+    assert edge1 == pytest.approx(edge0)
+    assert build1 == build0
+
+
+def test_the_build_folder_can_be_moved_so_a_variant_does_not_overwrite_the_default_parts(tmp_path):
+    _, _, build = _numbers({"CUBE_FRAME_BUILD": str(tmp_path)})
+    assert build == str(tmp_path)

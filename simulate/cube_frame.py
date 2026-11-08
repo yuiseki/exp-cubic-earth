@@ -26,7 +26,7 @@ import summit_bars as sb
 import summit_frame as sf
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BUILD = os.path.join(HERE, "build")
+BUILD = os.environ.get("CUBE_FRAME_BUILD", os.path.join(HERE, "build"))  # a variant (CUBE_FRAME_DEPTH) writes elsewhere
 PLAN = g.Plan(sb.PLAN_FPC)
 WALL, CLEAR, SLOT, EDGE_AT, SIZE, CUT = sb.WALL, sb.CLEAR, sb.SLOT, sb.EDGE_AT, sb.SIZE, sb.CUT
 PART_CLEAR = sb.PART_CLEAR
