@@ -12,6 +12,8 @@ uv run --no-project --with numpy --with numpy-stl python cube.py --fpc top=-y,A=
 # テスト
 uv run --no-project --with numpy --with pytest python -m pytest -q test_geometry.py
 uv run --no-project --with gmsh --with numpy --with numpy-stl --with pytest python -m pytest -q test_summit_frame.py
+# 印刷用 STL (hardware/frame) が 1 つにつながった閉じた立体で、README の大きさと体積のとおりか
+uv run --no-project --with numpy --with numpy-stl --with pytest python -m pytest -q test_frame_stls.py
 
 # 3. 山頂型モジュールの Y 字の枠
 uv run --no-project --with gmsh --with numpy --with numpy-stl python summit_frame.py
