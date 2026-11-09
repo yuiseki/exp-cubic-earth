@@ -24,13 +24,18 @@ static inline bool sceneNameOk(const char *s) {
   return strstr(s, "..") == nullptr;
 }
 
+// 名前 "earth" だけは /scenes の外の /earth: 起動のあとに映す地球 (#u で戻る先)。#w earth,<面> で書く
+static inline bool sceneIsEarth(const char *name) { return strcmp(name, "earth") == 0; }
+
 static inline bool sceneDirPath(char *out, size_t n, const char *name) {
   if (!sceneNameOk(name)) return false;
+  if (sceneIsEarth(name)) return snprintf(out, n, "/earth") < (int)n;
   return snprintf(out, n, "/scenes/%s", name) < (int)n;
 }
 
 static inline bool sceneFacePath(char *out, size_t n, const char *name, int f) {
   if (!sceneNameOk(name)) return false;
+  if (sceneIsEarth(name)) return snprintf(out, n, "/earth/face%d.bin", f) < (int)n;
   return snprintf(out, n, "/scenes/%s/face%d.bin", name, f) < (int)n;
 }
 

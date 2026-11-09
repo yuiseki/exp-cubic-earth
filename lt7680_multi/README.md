@@ -33,7 +33,7 @@ esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset \
 
 旗を付けないと 74HC138 で 1 枚 (`NUM_BOARDS=1`)。
 
-パーティションは `max_app_8MB` (アプリ 7.9MB、OTA なし)。焼き込みの地球 (約 2.8MB) と Wi-Fi/ESP-NOW (約 0.6MB) で、既定のアプリ領域 (3.3MB) に入らない。不揮発領域 (nvs、0x9000) は既定と同じ位置と大きさなので、既定のパーティションから切り替えるときは、パーティション表とアプリだけを焼けば面の割り当てが残る:
+パーティションは、いまの個体は `max_app_8MB` (アプリ 7.9MB、OTA なし)。地球を実行ファイルに焼き込んでいた頃は、地球 (約 2.8MB) と Wi-Fi/ESP-NOW (約 0.6MB) で既定のアプリ領域 (3.2MB) に入らなかった。いまは地球を microSD の `/earth` から読むので、アプリは約 1.1MB で、既定の `default_8MB` (アプリ領域 2 つ、OTA 可) に入る (`PartitionScheme=default_8MB` でビルドして確認済み)。不揮発領域 (nvs、0x9000) は既定と同じ位置と大きさなので、既定のパーティションから切り替えるときは、パーティション表とアプリだけを焼けば面の割り当てが残る:
 
 ```sh
 esptool --chip esp32s3 --port $PORT --before usb-reset --after hard-reset write-flash \
@@ -99,20 +99,29 @@ XIAO ESP32-S3 は、付属のアンテナを U.FL の端子に挿さないと、
 
 画像は 480x480 の JPEG (512KB まで)。面の回転は使わず、パネルにそのまま描く (画像の上がパネルの上)。取りに行く先は `WEB_BASE` で変えられる。Cloudflare のキャッシュが差し替える前の画像を返さないよう、URL に毎回 `?t=<millis>` を付ける。HTTPS の証明書は確かめていない (`setInsecure`)。展開は JPEGDEC (bitbank、Apache-2.0、1.8.5、`arduino-cli lib install JPEGDEC`)。純粋な部分 (URL、名前、AP の順番) は `web_faces.h`、`test/test_web_faces.cpp`。
 
-## microSD のシーン (`#s`、`#e`、`#w`、`host/send_scene.py`)
+## 地球は microSD の /earth (起動、`#u`)
+
+起動直後は、各基板に札を映す。上から `UNIT-01-N` (MAC から決める。北極側 `-N`、南極側 `-S`)、基板の名前 (A、B、C)、`CUBIC-EARTH`、四辺に辺の番号 (上 1、右 2、下 3、左 4)。そのあと microSD の `/earth/face0-5.bin` を PSRAM に読んで地球を映す (3 枚で数秒)。`/earth` が読めないときは札のまま、シリアルに `earth: 0 of 6 faces` と書く。`#u` は `/earth` を読み直して地球に戻す。札の絵は `face_label.h`、`test/test_face_label.cpp`。
+
+```sh
+# 地球の 6 面を作る (焼き込みのヘッダーから。ヘッダーは build には入れない)
+uv run -q --no-project --with numpy python -I host/earth_header.py earth_qsc480x6.h ~/Workspaces/tmp/earth-sd
+# モジュールを USB でつないで、名前 "earth" で書く (microSD の /scenes ではなく /earth に入る)
+python3 host/send_scene.py $PORT ~/Workspaces/tmp/earth-sd earth
+```
+
+## microSD のシーン (`#s`、`#w`、`host/send_scene.py`)
 
 シーン k は microSD の `/scenes/<k>/face<f>.bin` (f = 0〜5、480x480 RGB565 リトルエンディアン、回転前。`#U` や `host/clouds.py` の `face<f>.bin` と同じ並び)。`#s<k>` で、各基板の面 (`#f` の割り当て) をシーン k から読み、回転を付けて描く。ESP-NOW で送っても同じ。
 
 ```sh
-# 焼き込みの地球をシーン 0 として書き出す (6 面で約 1.9 秒)
-#e0
 # 母艦の clouds.py が作った face0-5.bin を、シーン 1 として書く (pi5-deck から USB、1 面約 2.3 秒)
 ssh pi5-deck "~/.venv-esptool/bin/python tmp/hub3/send_scene.py $PORT tmp/cubic-clouds-20261019 1"
 # 切り替え (pi5-deck の espnow_bridge に 1 行送る)
 #s1
 ```
 
-読んだ面は `#U` と同じ PSRAM の面 (`faceOverride`) に置くので、そのあとの `#E` や `#G` (飛行機と船) もシーンの画像を背景に使う (`#u` で焼き込みの地球に戻る)。ISS の軌跡は、母艦でシーンの 6 面に描き込んで別のシーンにする:
+読んだ面は `#U` と同じ PSRAM の面 (`faceOverride`) に置くので、そのあとの `#E` や `#G` (飛行機と船) もシーンの画像を背景に使う (`#u` で `/earth` の地球に戻る)。ISS の軌跡は、母艦でシーンの 6 面に描き込んで別のシーンにする:
 
 ```sh
 # 母艦: clouds.py の面 (ここでは 2026-10-19) に、前後 90 分の ISS の軌跡と今の位置を描く (過去は橙、未来は水色、今は赤)
@@ -201,7 +210,7 @@ ssh pi5-deck "~/.venv-esptool/bin/python tmp/cubic-clouds/send_faces.py $PORT tm
 
 - GIBS は登録なしで全球 4096x2048 を 1 回で取れる。昼の側だけを並べた 1 日 1 枚の合成で、極夜 (10 月は北緯約 70 度より北) と南緯約 84 度より南は真っ黒 (データ無し)
 - その黒い所は、SSEC RealEarth の 1 時間ごとの全球赤外合成 (`globalir`、表記「Source: SSEC RealEarth, UW-Madison」が要る) の雲を、雲の無い Blue Marble に白く重ねて埋める。RealEarth の `/api/image` は Web メルカトル (GeoTIFF で確認) で、85 度まで、透かしなしは幅 1024 画素まで (1280 で「Size limit exceeded」の透かし)。85 度より先は 85 度の輪の平均の色。極夜では凍った海も冷たく、雲と同じく白く写る
-- `#U<面>` は面の画像を 4096 バイトずつ受けて PSRAM に置き (ビルドに `PSRAM=opi` が要る)、以後その面は焼き込みの地球の代わりに使う。1 面約 2〜2.6 秒。`#u` で焼き込みに戻す
+- `#U<面>` は面の画像を 4096 バイトずつ受けて PSRAM に置き (ビルドに `PSRAM=opi` が要る)、以後その面は地球の代わりに使う。1 面約 2〜2.6 秒。`#u` で `/earth` の地球に戻す
 
 ## 名前つきのシーンと日付のコマの再生 (`#v`、`scene_names.h`)
 

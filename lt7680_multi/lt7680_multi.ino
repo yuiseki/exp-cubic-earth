@@ -11,7 +11,6 @@
 // 命令 (先頭に '#'): n<0-2> 基板を選ぶ、0 選んだ基板の流れ、A 全基板の流れ、E 地球、s<k> microSD のシーン k、N 全基板に白地の名前 (基板 0〜2 = A〜C) と辺の番号 (上から時計回りに 1〜4)、K/W 黒/白、m<名前> モジュール名、j Web の <名前>-side-a〜c.jpg を描く、r 状態、b バックライト (b0 消す、b1 点ける、b だけなら切り替え)、i<分> 何もしないときにバックライトを消すまでの分 (USB ホストにつながっているときだけ、0 で消さない)
 // 面の割り当て: #f<x>,<n>[,<r>] で基板 x に面 n (0-5) を、時計回りに 90 度 x r (0-3) 回して描く。不揮発領域に保存し、再起動後も使う
 
-#include "earth_qsc480x6.h"
 #include "rotate.h"
 #include "qsc.h"
 #include "font5x7.h"
@@ -25,6 +24,7 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <esp_mac.h>
 #include "byte_ring.h"
 #include "reg_verify.h"
 #include "idle_backlight.h"
@@ -59,7 +59,10 @@ Preferences prefs;
 #define boardFace(b) (faceImage(faceOf[b]))
 // 送られてきた面の画像 (#U、PSRAM)。無ければ焼き込みの地球
 uint16_t *faceOverride[NUM_FACES];
-#define faceImage(f) (faceOverride[f] ? (const uint16_t *)faceOverride[f] : EARTH_QSC480X6[f])
+// 面の画像は faceOverride (PSRAM) だけ。地球は microSD の /earth から起動時に読む (loadEarth)。読めていない面は nullptr で、drawFace は代わりに名前の札を描く
+#define faceImage(f) ((const uint16_t *)faceOverride[f])
+char unitLabel[16] = "UNIT-??";  // setup で MAC から決める (face_label.h の unitName)
+void drawLabel();
 
 static const int PIN_RESET  = D1;
 static const int PIN_BL     = D3;
@@ -495,6 +498,7 @@ void fullWindow() {
 
 // 選んだ基板の表示用メモリに face を書く (480x480 で約 0.6 秒、画素 20MHz)
 void drawFace(const uint16_t *face) {
+  if (!face) { drawLabel(); return; }
   uint32_t t0 = millis();
   if (drawRegion(face, 0, 0, 480, 480)) Serial.printf("board %d: face written in %lu ms\n", curBoard, (unsigned long)(millis() - t0));
 }
@@ -1087,7 +1091,9 @@ void demoDouble(int seconds, bool labels, int planesPerBoard, bool vsync, uint32
 // 1 機ごとに、前の場所と新しい場所を囲む四角を、面の画像に印を重ねて 1 回で書く (消してから描くとちらつく)
 
 bool isSeaPixel(int face, int x, int y) {
-  uint16_t c = EARTH_QSC480X6[face][constrain(y, 0, 479) * 480 + constrain(x, 0, 479)];
+  const uint16_t *img = faceImage(face);
+  if (!img) return true;  // 地球を読めていないときは、全部海 (船は止まらない)
+  uint16_t c = img[constrain(y, 0, 479) * 480 + constrain(x, 0, 479)];
   int r = c >> 11, g = (c >> 5) & 63, b = c & 31;
   return r < 6 && g < 12 && b >= 6;  // Blue Marble の海は暗い紺
 }
@@ -1398,6 +1404,25 @@ bool loadSceneFace(const char *name, int f) {
   return got == FACE_BYTES;
 }
 
+// 選んだ基板に、ユニット名と基板の名前 (A, B, C)、CUBIC-EARTH、辺の番号 1〜4 の札を描く (face_label.h)。起動直後と、地球を読めていないとき
+void drawLabel() {
+  int b = curBoard;
+  streamPixels(0, 0, 480, 480, [b](int x, int y) { return faceLabelColor(b, unitLabel, x, y); });
+}
+
+// microSD の /earth/face0-5.bin を faceOverride (PSRAM) に読む。読めなかった面は nullptr にして、札のまま (isSeaPixel は海扱い)。読めた面の数を返す
+int loadEarth() {
+  uint32_t t0 = millis();
+  int ok = 0;
+  for (int f = 0; f < NUM_FACES; f++) {
+    if (loadSceneFace("earth", f)) ok++;
+    else { free(faceOverride[f]); faceOverride[f] = nullptr; }
+  }
+  Serial.printf("earth: %d of %d faces from /earth in %lu ms%s\n", ok, NUM_FACES, (unsigned long)(millis() - t0),
+                ok < NUM_FACES ? " (send them with: send_scene.py PORT DIR earth)" : "");
+  return ok;
+}
+
 int showSceneNamed(const char *name) {
   uint32_t t0 = millis();
   int keep = curBoard, shown = 0;
@@ -1423,6 +1448,11 @@ void showScene(int k) {
 File openSceneForWrite(const char *name, int f) {
   char path[96];
   if (!sceneDirPath(path, sizeof path, name)) return File();
+  if (sceneIsEarth(name)) {
+    if (!SD.exists("/earth")) SD.mkdir("/earth");
+    if (!sceneFacePath(path, sizeof path, name, f)) return File();
+    return SD.open(path, FILE_WRITE);
+  }
   if (!SD.exists("/scenes")) SD.mkdir("/scenes");
   for (char *q = path + strlen("/scenes/"); ; q++) {
     if (*q == '/' || *q == 0) {
@@ -1489,21 +1519,6 @@ void viewScenes(const char *args) {
     }
     if (!v.loop) return;
   }
-}
-
-// #e<k>: 焼き込みの地球の 6 面を、シーン k として書き出す
-void exportEarth(int k) {
-  if (!mountCard(SD_HZ)) return;
-  uint32_t t0 = millis();
-  char name[12];
-  snprintf(name, sizeof name, "%d", k);
-  for (int f = 0; f < NUM_FACES; f++) {
-    File fl = openSceneForWrite(name, f);
-    if (!fl) { Serial.printf("e error: cannot write scene %d face %d\n", k, f); return; }
-    fl.write((const uint8_t *)EARTH_QSC480X6[f], FACE_BYTES);
-    fl.close();
-  }
-  Serial.printf("e done: earth as scene %d in %lu ms\n", k, (unsigned long)(millis() - t0));
 }
 
 // #w<k>,<f>: 面の画像を #U と同じやり方 (4096 バイトずつ、受けるたびに "k") でシリアルから受け、シーン k の面 f として書く。
@@ -1595,7 +1610,12 @@ void setup() {
   pinMode(PIN_RESET, OUTPUT_OPEN_DRAIN);
   gpio_pullup_en((gpio_num_t)PIN_RESET);
   digitalWrite(PIN_RESET, HIGH);
-  qscInit(qsc, 139.767f, 480);  // earth_qsc480x6.h の面 0 の中心経度
+  qscInit(qsc, 139.767f, 480);  // 地球 (microSD の /earth) の面 0 の中心経度
+  {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    unitName(mac, unitLabel, sizeof unitLabel);
+  }
   selectSetup();
   pinMode(PIN_PANEL_SCK, OUTPUT);
   digitalWrite(PIN_PANEL_SCK, LOW);
@@ -1628,11 +1648,18 @@ void setup() {
     initPanel();
     writeReg(0x12, readReg(0x12) | 0x40);  // 表示オン
     setupMemory();
-    drawFace(boardFace(curBoard));
+    drawLabel();  // 起動直後は札。地球は microSD から読んだあとに映す
   }
   curBoard = 0;
   digitalWrite(PIN_BL, HIGH);
   uint32_t t1 = millis();
+  if (loadEarth() > 0)
+    for (int b = 0; b < NUM_BOARDS; b++) {
+      if (!ok[b] || !boardFace(b)) continue;
+      curBoard = b;
+      drawFace(boardFace(b));
+    }
+  curBoard = 0;
   while (millis() < 3000) delay(10);  // シリアルの読み手が付いてから報告する
   Serial.printf("reset reason: %d, boards: %d, select: %s, pixel SPI %lu Hz, drive %d\n", (int)esp_reset_reason(), NUM_BOARDS,
 #ifdef BOARD_SELECT_DIRECT
@@ -2085,7 +2112,6 @@ void loop() {
         if (WiFi.status() != WL_CONNECTED) esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
       } break;  // #a 周りの Wi-Fi を探して受信の強さを出す (無線とアンテナの確認)
     case 's': showScene(cmdIn.parseInt()); break;  // #s<k> シーン k (microSD) を全基板に描く
-    case 'e': exportEarth(cmdIn.parseInt()); break;  // #e<k> 焼き込みの地球をシーン k として microSD に書く
     case 'w': {  // #w<k または名前>,<f> シーン k (名前つきなら /scenes/<名前>) の面 f を受けて microSD に書く (host/send_scene.py)
       String nm = cmdIn.readStringUntil(',');
       nm.trim();
@@ -2103,13 +2129,13 @@ void loop() {
       int keep = curBoard;
       for (int b = 0; b < NUM_BOARDS; b++) {
         curBoard = b;
-        streamPixels(0, 0, 480, 480, [b](int x, int y) { return faceLabelColor(b, x, y); });
+        drawLabel();
       }
       curBoard = keep;
       Serial.printf("cmd N: boards 0..%d show A..%c, edges 1 top, 2 right, 3 bottom, 4 left\n", NUM_BOARDS - 1, 'A' + NUM_BOARDS - 1);
       break;
     }
-    case 'V': verifyFace(boardFace(curBoard)); break;
+    case 'V': if (boardFace(curBoard)) verifyFace(boardFace(curBoard)); else Serial.println("cmd V: no earth loaded"); break;
     case 'S': {
       long mhz = cmdIn.parseInt();
       if (mhz >= 1 && mhz <= 40) pixelHz = mhz * 1000000;
@@ -2118,7 +2144,7 @@ void loop() {
     }
     case 'F': {  // 選んだ基板に面 n (0〜3) を描く。並べ方を試す用
       long n = cmdIn.parseInt();
-      if (n >= 0 && n < NUM_FACES) { Serial.printf("cmd F: board %d face %ld\n", curBoard, n); drawFace(EARTH_QSC480X6[n]); }
+      if (n >= 0 && n < NUM_FACES) { Serial.printf("cmd F: board %d face %ld\n", curBoard, n); drawFace(faceImage(n)); }
       else Serial.println("cmd F: face must be 0-5");
       break;
     }
@@ -2241,11 +2267,11 @@ void loop() {
     }
     case 'J': fetchTrack(flightFile); fetchTrack(shipFile); break;  // #J Web の flights.bin と ships.bin で microSD の便と船を差し替える
     case 'U': receiveFace(cmdIn.parseInt()); break;  // #U<面> 面の画像を受け取る
-    case 'u': {  // 送られてきた面の画像を捨てて、焼き込みの地球に戻す
-      for (int f = 0; f < NUM_FACES; f++) { free(faceOverride[f]); faceOverride[f] = nullptr; }
+    case 'u': {  // 送られてきた面の画像を捨てて、microSD の /earth の地球に戻す
+      loadEarth();
       for (int b = 0; b < NUM_BOARDS; b++) { curBoard = b; drawToPage(0); showPage(0); drawFace(boardFace(b)); }
       curBoard = 0;
-      Serial.println("cmd u: built-in faces");
+      Serial.println("cmd u: earth");
       break;
     }
     case 'R': {  // #R<基板>,<コマ> パラパラ漫画の 1 コマを受ける

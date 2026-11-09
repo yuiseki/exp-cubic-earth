@@ -27,6 +27,11 @@ int main() {
   assert(sceneFacePath(p, sizeof p, "shikisai-lst/2025-07-01", 0) && strcmp(p, "/scenes/shikisai-lst/2025-07-01/face0.bin") == 0);
   assert(!sceneFacePath(p, sizeof p, "../x", 0));
   assert(sceneDirPath(p, sizeof p, "shikisai-lst") && strcmp(p, "/scenes/shikisai-lst") == 0);
+  // the name "earth" is the earth every board shows after boot: /earth/face<f>.bin, outside /scenes
+  assert(sceneDirPath(p, sizeof p, "earth") && strcmp(p, "/earth") == 0);
+  assert(sceneFacePath(p, sizeof p, "earth", 5) && strcmp(p, "/earth/face5.bin") == 0);
+  assert(sceneFacePath(p, sizeof p, "earth-2", 5) && strcmp(p, "/scenes/earth-2/face5.bin") == 0);
+  assert(sceneFacePath(p, sizeof p, "earth/x", 0) && strcmp(p, "/scenes/earth/x/face0.bin") == 0);
 
   // range: "2025-01" takes both halves of January, a full date takes that one frame on
   assert(frameInRange("2025-01-01", "2025-01", "2026-10"));
