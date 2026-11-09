@@ -120,6 +120,8 @@ uv run -q --no-project --with numpy --with sgp4 python -I host/scene_iss.py ~/tm
 # pi5-deck: シーン 2 として書く (このモジュールの面 4、3、0 だけ)。そのあと ESP-NOW で #s2、#G60,1,30
 ~/.venv-esptool/bin/python tmp/hub3/send_scene.py $PORT tmp/cubic-scene-iss 2 4 3 0
 ```
+`scene_iss.py` の TLE と経緯度の計算は `iss_track.py` のものを使う (コピーは持たない。`iss_track.py` は pyproj を関数の中で読み込むので、上の pyproj 無しの実行で動く)。`host/test_scene_iss.py` は、関数に分ける前のスクリプトが同じ TLE と時刻で書いた 6 面の sha256 (4 組、`host/testdata/scene_iss_golden.json`) と突き合わせる。`uv run -q --no-project --with pytest --with numpy --with sgp4 --with pyproj python -m pytest -q test_scene_iss.py`
+
 
 ISS の軌跡は描いた時刻のもので、動かない。ESP-NOW で `#s2` と `#G60,1,30` を送り、雲と ISS の上にラベル付きの飛行機と船 (102 個) を 60 秒動かせた (2026-10-28)。
 

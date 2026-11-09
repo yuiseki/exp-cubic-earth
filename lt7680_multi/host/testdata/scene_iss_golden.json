@@ -1,0 +1,90 @@
+[
+ {
+  "now": "2026-11-07T03:00:00",
+  "minutes": 90,
+  "lon0": 139.767,
+  "sha256": [
+   "e03108c372ced01360e9e981aef119720c7a1f92817e0b6b2c67c6fcd86804a7",
+   "0cfe1552e63a6566be573157c7342757aad47459b254f251c399085a22b0f9d0",
+   "1e6c94fccd5159a72141592595924cd367483f2fc6c783ff15cda84d7f3a756e",
+   "b2527b7dc56e7ace5ce43411c91b0c5d123fd9b2dbbf1c8d3483dfe87ec9170e",
+   "a02e114faa332c11b6cd07901e2a3001b57c475b65048a5878d423df81a1281c",
+   "598fb94fcae651520c16e11cee3ff715ad95de5d1a94e0fcccc1061527d745a4"
+  ],
+  "nonzero": [
+   39,
+   2891,
+   429,
+   2738,
+   1886,
+   1732
+  ],
+  "stderr": "ISS at -49.9, 111.9 on face 5 (126, 40); wrote out0"
+ },
+ {
+  "now": "2026-11-07T03:40:00",
+  "minutes": 90,
+  "lon0": 139.767,
+  "sha256": [
+   "513c4dadef295f50f9cd8d578e07b245a6d52c463b05a9691753b01c24686ddf",
+   "61e98155fae5b60972dec8971d30256c37d78bf1b6d10dc85003c1ea981509b7",
+   "1e6c94fccd5159a72141592595924cd367483f2fc6c783ff15cda84d7f3a756e",
+   "b2527b7dc56e7ace5ce43411c91b0c5d123fd9b2dbbf1c8d3483dfe87ec9170e",
+   "9906b66b66395f7a6faf884547ad848d524517429afcf617d814a9afb0adbd37",
+   "6b6b92caa298e8fbccef880aa3a1d72fe99fcc8ebb8fc1ceb7d11c0257a65738"
+  ],
+  "nonzero": [
+   774,
+   2287,
+   429,
+   2738,
+   1699,
+   1775
+  ],
+  "stderr": "ISS at 38.5, -109.6 on face 1 (345, 22); wrote out1"
+ },
+ {
+  "now": "2026-11-07T04:00:00",
+  "minutes": 45,
+  "lon0": 0.0,
+  "sha256": [
+   "fb611424523adf2dbb9f677faf5747c5300ddd016793b944f3b3ad81a0af6abb",
+   "7ffe2fa2cc5d4f1e4d232ac6f00b536193d1285abdade1e144449bbf60ae79d0",
+   "37832d82e8de0c8b87508512c19cec7b2b18c3380a556946cb28952ef9bc97d7",
+   "3848f9ca58b544e8782ce1f0ac21210367afccb014289649929d49297b4b8d3f",
+   "07cde862a380641c08d190d48bbb9a6afd075df4fba08c68c0dceaf05b8adfe1",
+   "d77dc20885c9dabe20285ff310617bea8fa822f21894a081edae3a77a606e7c1"
+  ],
+  "nonzero": [
+   1450,
+   311,
+   898,
+   633,
+   759,
+   878
+  ],
+  "stderr": "ISS at 36.7, -10.1 on face 0 (188, 40); wrote out2"
+ },
+ {
+  "now": "2026-11-07T03:30:00",
+  "minutes": 30,
+  "lon0": -120.0,
+  "sha256": [
+   "6bef03768207cf660248bb616fc69aef342a0b443be97eaa8c974e8588bdc65a",
+   "9677f859553be4a9421aa2320282e279d6160f2c7daa3ef042d8bd997c3f9377",
+   "91d2d62a5700cbf9404e3c575c3b6fc19e1e31c24c6fcfc0a2cf70d41314b447",
+   "2773e8998c0cf6f94dd55662003a923ac34617c0a6755a320aaa7c815eff16f6",
+   "3a9a7ecbbec390494bfb338c9ab9d3d470b8b18861d496218ddccdfd1e8a49ff",
+   "4870e318eae39abd7ba5087c8cda69c0eec56e21ce5749eca0853bce44c77c60"
+  ],
+  "nonzero": [
+   1424,
+   204,
+   0,
+   384,
+   746,
+   582
+  ],
+  "stderr": "ISS at 10.8, -137.5 on face 0 (139, 172); wrote out3"
+ }
+]

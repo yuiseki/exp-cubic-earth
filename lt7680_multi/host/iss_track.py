@@ -15,7 +15,6 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from pyproj import Proj
 from sgp4.api import Satrec, jday
 
 URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE"
@@ -70,6 +69,8 @@ def latlon(sat, when):
 
 @functools.lru_cache(maxsize=None)
 def _face(lon0):
+    from pyproj import Proj  # only here: scene_iss uses this module's maths and has no pyproj
+
     proj = Proj(f"+proj=qsc +R=1 +lat_0=0 +lon_0={lon0}")
     half, _ = proj(lon0 + 45.0, 0.0)
     c = (math.cos(math.radians(lon0)), math.sin(math.radians(lon0)), 0.0)
